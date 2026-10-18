@@ -1,0 +1,36 @@
+{
+  "name": "HelixLobby",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "LobbyShared": {
+        "$path": "src/shared"
+      }
+    },
+    "ServerScriptService": {
+      "LobbyServer": {
+        "$path": "src/server"
+      }
+    },
+    "StarterPlayer": {
+      "StarterPlayerScripts": {
+        "LobbyClient": {
+          "$path": "src/client"
+        }
+      }
+    },
+    "Lighting": {
+      "$properties": {
+        "Technology": "Future",
+        "ClockTime": 0.2,
+        "Brightness": 0.6,
+        "GlobalShadows": true
+      }
+    },
+    "Players": {
+      "$properties": {
+        "CharacterAutoLoads": true
+      }
+    }
+  }
+}

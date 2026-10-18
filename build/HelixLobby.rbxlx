@@ -1,0 +1,5426 @@
+<roblox version="4">
+  <Item class="Lighting" referent="0">
+    <Properties>
+      <string name="Name">Lighting</string>
+      <float name="Brightness">0.6</float>
+      <float name="ClockTime">0.2</float>
+      <bool name="GlobalShadows">true</bool>
+      <token name="Technology">4</token>
+    </Properties>
+  </Item>
+  <Item class="Players" referent="1">
+    <Properties>
+      <string name="Name">Players</string>
+      <bool name="CharacterAutoLoads">true</bool>
+    </Properties>
+  </Item>
+  <Item class="ReplicatedStorage" referent="2">
+    <Properties>
+      <string name="Name">ReplicatedStorage</string>
+    </Properties>
+    <Item class="Folder" referent="3">
+      <Properties>
+        <string name="Name">LobbyShared</string>
+      </Properties>
+      <Item class="ModuleScript" referent="4">
+        <Properties>
+          <string name="Name">Theme</string>
+          <string name="Source"><![CDATA[--!strict
+-- Shared art direction for the HELIX lobby prototype.
+-- Everything visual (scene + UI) pulls colors and fonts from here so the
+-- whole menu stays on one palette.
+
+local Theme = {}
+
+Theme.GameTitle = "HELIX"
+Theme.GameSubtitle = "TACTICAL OPS"
+Theme.SeasonName = "SEASON 01 // NEON FRONTIER"
+
+Theme.Colors = {
+	-- Surfaces
+	Void = Color3.fromRGB(6, 8, 15),
+	Deep = Color3.fromRGB(10, 14, 24),
+	Panel = Color3.fromRGB(14, 19, 32),
+	PanelRaised = Color3.fromRGB(21, 28, 46),
+	PanelHover = Color3.fromRGB(29, 38, 62),
+	Line = Color3.fromRGB(255, 255, 255),
+
+	-- Text
+	Text = Color3.fromRGB(236, 241, 250),
+	TextDim = Color3.fromRGB(150, 162, 190),
+	TextFaint = Color3.fromRGB(92, 104, 132),
+
+	-- Accents
+	Cyan = Color3.fromRGB(0, 214, 255),
+	CyanDeep = Color3.fromRGB(0, 120, 220),
+	Amber = Color3.fromRGB(255, 186, 38),
+	AmberDeep = Color3.fromRGB(255, 112, 20),
+	Magenta = Color3.fromRGB(255, 64, 148),
+	Green = Color3.fromRGB(64, 232, 150),
+	Red = Color3.fromRGB(255, 76, 96),
+
+	-- Rarity
+	Common = Color3.fromRGB(150, 160, 180),
+	Rare = Color3.fromRGB(60, 150, 255),
+	Epic = Color3.fromRGB(178, 92, 255),
+	Legendary = Color3.fromRGB(255, 180, 40),
+
+	-- Scene materials
+	Floor = Color3.fromRGB(13, 17, 28),
+	FloorTrim = Color3.fromRGB(24, 31, 48),
+	Wall = Color3.fromRGB(17, 22, 36),
+	WallInset = Color3.fromRGB(11, 14, 24),
+	Metal = Color3.fromRGB(40, 48, 68),
+	PadTop = Color3.fromRGB(22, 28, 44),
+}
+
+Theme.Fonts = {
+	Display = Enum.Font.Michroma,
+	Heavy = Enum.Font.BuilderSansExtraBold,
+	Bold = Enum.Font.BuilderSansBold,
+	Medium = Enum.Font.BuilderSansMedium,
+	Regular = Enum.Font.BuilderSans,
+}
+
+-- Rarity name -> color lookup used by item and shop cards.
+Theme.Rarity = {
+	Common = Theme.Colors.Common,
+	Rare = Theme.Colors.Rare,
+	Epic = Theme.Colors.Epic,
+	Legendary = Theme.Colors.Legendary,
+}
+
+-- Lobby layout (world space). The camera sits at +Z looking toward -Z,
+-- so +X reads as screen-right.
+Theme.Lobby = {
+	FloorY = 0,
+	PadHeight = 0.9,
+	Slots = {
+		-- Slot 1 is the local player's hero pad: slightly forward and larger.
+		{ Position = Vector3.new(-4.2, 0, 1.6), Radius = 4.4, Hero = true },
+		{ Position = Vector3.new(4.2, 0, 0), Radius = 3.8, Hero = false },
+		{ Position = Vector3.new(-12.4, 0, -3.4), Radius = 3.8, Hero = false },
+		{ Position = Vector3.new(12.4, 0, -3.4), Radius = 3.8, Hero = false },
+	},
+}
+
+return Theme
+]]></string>
+        </Properties>
+      </Item>
+    </Item>
+  </Item>
+  <Item class="ServerScriptService" referent="5">
+    <Properties>
+      <string name="Name">ServerScriptService</string>
+    </Properties>
+    <Item class="Folder" referent="6">
+      <Properties>
+        <string name="Name">LobbyServer</string>
+      </Properties>
+      <Item class="Script" referent="7">
+        <Properties>
+          <string name="Name">LobbyScene</string>
+          <token name="RunContext">0</token>
+          <string name="Source"><![CDATA[--!strict
+-- Builds the HELIX hero bay: lighting, environment, and the four party pads.
+-- Presentation only — no gameplay. The local player's character is parked on
+-- the hero pad (slot 1); slots 2-4 are empty "invite" pads.
+
+local Lighting = game:GetService("Lighting")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Theme = require(ReplicatedStorage:WaitForChild("LobbyShared"):WaitForChild("Theme"))
+local C = Theme.Colors
+
+local CAMERA_POS = Vector3.new(0, 6.2, 25)
+
+----------------------------------------------------------------------------
+-- Helpers
+----------------------------------------------------------------------------
+
+local root = Instance.new("Folder")
+root.Name = "HelixLobby"
+
+local function part(props: { [string]: any }, parent: Instance?): BasePart
+	local className = props.ClassName or "Part"
+	local p = Instance.new(className) :: BasePart
+	p.Anchored = true
+	p.CanCollide = false
+	p.CastShadow = false
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	p.Material = Enum.Material.SmoothPlastic
+	for key, value in props do
+		if key ~= "ClassName" then
+			(p :: any)[key] = value
+		end
+	end
+	p.Parent = parent or root
+	return p
+end
+
+-- Cylinders in Roblox run along X; this stands one upright.
+local UPRIGHT = CFrame.Angles(0, 0, math.rad(90))
+
+local function disc(position: Vector3, diameter: number, height: number, props: { [string]: any }, parent: Instance?)
+	props.Shape = Enum.PartType.Cylinder
+	props.Size = Vector3.new(height, diameter, diameter)
+	props.CFrame = CFrame.new(position + Vector3.new(0, height / 2, 0)) * UPRIGHT
+	return part(props, parent)
+end
+
+local function neon(color: Color3, transparency: number?): { [string]: any }
+	return { Material = Enum.Material.Neon, Color = color, Transparency = transparency or 0 }
+end
+
+local function merge(a: { [string]: any }, b: { [string]: any }): { [string]: any }
+	local out = table.clone(a)
+	for k, v in b do
+		out[k] = v
+	end
+	return out
+end
+
+----------------------------------------------------------------------------
+-- Lighting & post-processing
+----------------------------------------------------------------------------
+
+local function setupLighting()
+	-- Technology is not scriptable; default.project.json sets it to Future.
+	Lighting.ClockTime = 0.2
+	Lighting.Brightness = 0.6
+	Lighting.Ambient = Color3.fromRGB(14, 18, 30)
+	Lighting.OutdoorAmbient = Color3.fromRGB(22, 28, 46)
+	Lighting.ColorShift_Top = Color3.fromRGB(120, 170, 255)
+	Lighting.ColorShift_Bottom = Color3.fromRGB(10, 20, 40)
+	Lighting.EnvironmentDiffuseScale = 0.35
+	Lighting.EnvironmentSpecularScale = 1
+	Lighting.GlobalShadows = true
+	Lighting.ExposureCompensation = 0.15
+	Lighting.FogEnd = 100000
+
+	for _, child in Lighting:GetChildren() do
+		if child:IsA("PostEffect") or child:IsA("Atmosphere") or child:IsA("Sky") then
+			child:Destroy()
+		end
+	end
+
+	local sky = Instance.new("Sky")
+	sky.StarCount = 1500
+	sky.CelestialBodiesShown = false
+	sky.Parent = Lighting
+
+	local atmosphere = Instance.new("Atmosphere")
+	atmosphere.Density = 0.32
+	atmosphere.Offset = 0.1
+	atmosphere.Color = Color3.fromRGB(46, 70, 120)
+	atmosphere.Decay = Color3.fromRGB(12, 16, 34)
+	atmosphere.Glare = 0
+	atmosphere.Haze = 1.2
+	atmosphere.Parent = Lighting
+
+	local bloom = Instance.new("BloomEffect")
+	bloom.Intensity = 0.85
+	bloom.Size = 30
+	bloom.Threshold = 1.15
+	bloom.Parent = Lighting
+
+	local grade = Instance.new("ColorCorrectionEffect")
+	grade.Name = "Grade"
+	grade.Contrast = 0.14
+	grade.Saturation = 0.08
+	grade.Brightness = 0.01
+	grade.TintColor = Color3.fromRGB(238, 244, 255)
+	grade.Parent = Lighting
+
+	local dof = Instance.new("DepthOfFieldEffect")
+	dof.FocusDistance = 24
+	dof.InFocusRadius = 16
+	dof.FarIntensity = 0.3
+	dof.NearIntensity = 0
+	dof.Parent = Lighting
+
+	-- Tweened by the client when a full-screen page opens.
+	local blur = Instance.new("BlurEffect")
+	blur.Name = "MenuBlur"
+	blur.Size = 0
+	blur.Parent = Lighting
+end
+
+----------------------------------------------------------------------------
+-- Environment
+----------------------------------------------------------------------------
+
+local function buildFloor()
+	part({
+		Name = "Floor",
+		Size = Vector3.new(160, 1, 120),
+		CFrame = CFrame.new(0, -0.5, -10),
+		Color = C.Floor,
+		Reflectance = 0.14,
+		CanCollide = true,
+	})
+
+	-- Raised stage plate the pads sit on.
+	part({
+		Name = "Stage",
+		Size = Vector3.new(36, 0.25, 16),
+		CFrame = CFrame.new(0, 0.125, -1),
+		Color = C.FloorTrim,
+		Material = Enum.Material.Metal,
+		Reflectance = 0.05,
+	})
+	part(merge(neon(C.Cyan, 0.15), {
+		Name = "StageEdge",
+		Size = Vector3.new(36, 0.08, 0.12),
+		CFrame = CFrame.new(0, 0.26, 7),
+	}))
+	part(merge(neon(C.Amber, 0), {
+		Name = "StageEdgeHero",
+		Size = Vector3.new(7, 0.1, 0.16),
+		CFrame = CFrame.new(-4.2, 0.27, 7.02),
+	}))
+
+	-- Faint floor grid in front of the stage for depth.
+	for i = 0, 5 do
+		local z = 9 + i * 4
+		part(merge(neon(C.Cyan, 0.86 + i * 0.02), {
+			Name = "GridZ",
+			Size = Vector3.new(60, 0.02, 0.06),
+			CFrame = CFrame.new(0, 0.011, z),
+		}))
+	end
+	for x = -28, 28, 7 do
+		part(merge(neon(C.Cyan, 0.9), {
+			Name = "GridX",
+			Size = Vector3.new(0.06, 0.02, 24),
+			CFrame = CFrame.new(x, 0.011, 19),
+		}))
+	end
+end
+
+local WALL_CENTER = Vector3.new(0, 0, 10)
+local WALL_RADIUS = 26
+local WALL_HEIGHT = 24
+local WALL_PANELS = 13
+local WALL_SPAN = math.rad(130)
+
+local function wallCFrame(angle: number, radius: number, y: number): CFrame
+	local pos = WALL_CENTER + Vector3.new(math.sin(angle) * radius, y, -math.cos(angle) * radius)
+	return CFrame.lookAt(pos, Vector3.new(WALL_CENTER.X, y, WALL_CENTER.Z))
+end
+
+local function surfaceGui(host: BasePart, pixelsPerStud: number, brightness: number): SurfaceGui
+	local gui = Instance.new("SurfaceGui")
+	gui.Face = Enum.NormalId.Front
+	gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+	gui.PixelsPerStud = pixelsPerStud
+	gui.LightInfluence = 0
+	gui.Brightness = brightness
+	gui.AlwaysOnTop = false
+	gui.Parent = host
+	return gui
+end
+
+local function label(parent: Instance, text: string, font: Enum.Font, color: Color3, pos: UDim2, size: UDim2, xAlign: Enum.TextXAlignment?): TextLabel
+	local l = Instance.new("TextLabel")
+	l.BackgroundTransparency = 1
+	l.Text = text
+	l.Font = font
+	l.TextColor3 = color
+	l.TextScaled = true
+	l.Position = pos
+	l.Size = size
+	l.TextXAlignment = xAlign or Enum.TextXAlignment.Center
+	l.Parent = parent
+	return l
+end
+
+local function buildEmblem()
+	local plate = part({
+		Name = "Emblem",
+		Size = Vector3.new(18, 7, 0.1),
+		CFrame = wallCFrame(0, WALL_RADIUS - 1.2, 11),
+		Transparency = 1,
+	})
+	local gui = surfaceGui(plate, 60, 2.2)
+
+	local ring = Instance.new("Frame")
+	ring.AnchorPoint = Vector2.new(0.5, 0.5)
+	ring.Position = UDim2.fromScale(0.13, 0.5)
+	ring.Size = UDim2.fromOffset(260, 260)
+	ring.BackgroundTransparency = 1
+	ring.Rotation = 45
+	ring.Parent = gui
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = C.Cyan
+	stroke.Thickness = 14
+	stroke.Parent = ring
+	local core = Instance.new("Frame")
+	core.AnchorPoint = Vector2.new(0.5, 0.5)
+	core.Position = UDim2.fromScale(0.5, 0.5)
+	core.Size = UDim2.fromScale(0.42, 0.42)
+	core.BackgroundColor3 = C.Amber
+	core.BorderSizePixel = 0
+	core.Parent = ring
+
+	label(gui, Theme.GameTitle, Theme.Fonts.Display, C.Text, UDim2.fromScale(0.26, 0.12), UDim2.fromScale(0.72, 0.55), Enum.TextXAlignment.Left)
+	label(gui, Theme.GameSubtitle .. "  //  SQUAD HQ", Theme.Fonts.Bold, C.Cyan, UDim2.fromScale(0.265, 0.7), UDim2.fromScale(0.7, 0.16), Enum.TextXAlignment.Left)
+end
+
+local function buildWallScreen(angle: number, title: string, lines: { string })
+	local screen = part({
+		Name = "WallScreen",
+		Size = Vector3.new(7.5, 4.4, 0.2),
+		CFrame = wallCFrame(angle, WALL_RADIUS - 1.0, 8),
+		Color = Color3.fromRGB(4, 8, 16),
+	})
+	part(merge(neon(C.Cyan, 0.35), {
+		Name = "WallScreenFrame",
+		Size = Vector3.new(7.9, 4.8, 0.1),
+		CFrame = screen.CFrame * CFrame.new(0, 0, 0.12),
+	}))
+	local gui = surfaceGui(screen, 50, 1.6)
+	local bg = Instance.new("Frame")
+	bg.Size = UDim2.fromScale(1, 1)
+	bg.BackgroundColor3 = Color3.fromRGB(6, 14, 28)
+	bg.BorderSizePixel = 0
+	bg.Parent = gui
+	local gradient = Instance.new("UIGradient")
+	gradient.Rotation = 90
+	gradient.Color = ColorSequence.new(Color3.fromRGB(20, 60, 110), Color3.fromRGB(4, 10, 22))
+	gradient.Parent = bg
+
+	label(bg, title, Theme.Fonts.Display, C.Cyan, UDim2.fromScale(0.07, 0.08), UDim2.fromScale(0.86, 0.17), Enum.TextXAlignment.Left)
+	for i, line in lines do
+		label(bg, line, Theme.Fonts.Bold, C.Text, UDim2.fromScale(0.07, 0.3 + (i - 1) * 0.17), UDim2.fromScale(0.86, 0.12), Enum.TextXAlignment.Left)
+	end
+	local bar = Instance.new("Frame")
+	bar.Position = UDim2.fromScale(0.07, 0.86)
+	bar.Size = UDim2.fromScale(0.55, 0.04)
+	bar.BackgroundColor3 = C.Amber
+	bar.BorderSizePixel = 0
+	bar.Parent = bg
+end
+
+local function buildWall()
+	local step = WALL_SPAN / (WALL_PANELS - 1)
+	local panelWidth = 2 * WALL_RADIUS * math.sin(step / 2) + 0.15
+
+	for i = 0, WALL_PANELS - 1 do
+		local angle = -WALL_SPAN / 2 + i * step
+		local fromCenter = math.abs(i - (WALL_PANELS - 1) / 2)
+
+		part({
+			Name = "WallPanel",
+			Size = Vector3.new(panelWidth, WALL_HEIGHT, 1),
+			CFrame = wallCFrame(angle, WALL_RADIUS, WALL_HEIGHT / 2),
+			Color = C.Wall,
+			Material = Enum.Material.Metal,
+			Reflectance = 0.04,
+		})
+		-- Recessed inset for depth.
+		part({
+			Name = "WallInset",
+			Size = Vector3.new(panelWidth * 0.78, 9, 0.3),
+			CFrame = wallCFrame(angle, WALL_RADIUS - 0.6, 12.5),
+			Color = C.WallInset,
+		})
+		-- Baseboard light.
+		part(merge(neon(C.Cyan, 0.45), {
+			Name = "WallBase",
+			Size = Vector3.new(panelWidth * 0.86, 0.14, 0.1),
+			CFrame = wallCFrame(angle, WALL_RADIUS - 0.62, 1.4),
+		}))
+		-- Cornice light.
+		part(merge(neon(C.CyanDeep, 0.3), {
+			Name = "WallTop",
+			Size = Vector3.new(panelWidth, 0.2, 0.1),
+			CFrame = wallCFrame(angle, WALL_RADIUS - 0.55, 20.5),
+		}))
+
+		-- Vertical seams: brighter toward the center so the eye is pulled in.
+		if i > 0 then
+			local seamAngle = angle - step / 2
+			local seamHeight = 6 + math.max(0, 6 - fromCenter) * 1.6
+			part(merge(neon(C.Cyan, 0.1 + fromCenter * 0.06), {
+				Name = "WallSeam",
+				Size = Vector3.new(0.18, seamHeight, 0.18),
+				CFrame = wallCFrame(seamAngle, WALL_RADIUS - 0.7, 1.6 + seamHeight / 2),
+			}))
+		end
+	end
+
+	-- Soft wash so the wall isn't a black void.
+	for _, x in { -14, 0, 14 } do
+		local wash = part({
+			Name = "WallWash",
+			Size = Vector3.new(1, 1, 1),
+			CFrame = CFrame.lookAt(Vector3.new(x, 1, -8), Vector3.new(x * 1.1, 14, -18)),
+			Transparency = 1,
+		})
+		local light = Instance.new("SpotLight")
+		light.Color = Color3.fromRGB(60, 140, 255)
+		light.Brightness = 2.2
+		light.Range = 22
+		light.Angle = 80
+		light.Face = Enum.NormalId.Front
+		light.Parent = wash
+	end
+
+	buildEmblem()
+	buildWallScreen(math.rad(-36), "SQUAD STATUS", { "OPERATIVES  1 / 4", "READY CHECK  PENDING", "REGION  EU-WEST" })
+	buildWallScreen(math.rad(36), "INTEL FEED", { "EVENT  NEON FRONTIER", "DOUBLE XP  ACTIVE", "NEXT DROP  02:14:07" })
+end
+
+local function buildPillars()
+	for _, side in { -1, 1 } do
+		local base = Vector3.new(side * 19.5, 0, -5.5)
+		local pillar = part({
+			Name = "Pillar",
+			Size = Vector3.new(2.6, 22, 2.6),
+			CFrame = CFrame.new(base + Vector3.new(0, 11, 0)) * CFrame.Angles(0, math.rad(45 * side), 0),
+			Color = C.Metal,
+			Material = Enum.Material.Metal,
+			Reflectance = 0.06,
+		})
+		part(merge(neon(side < 0 and C.Cyan or C.Amber, 0.05), {
+			Name = "PillarStrip",
+			Size = Vector3.new(0.16, 16, 0.16),
+			CFrame = pillar.CFrame * CFrame.new(0, -1, -1.35),
+		}))
+		part({
+			Name = "PillarCap",
+			Size = Vector3.new(3.4, 0.6, 3.4),
+			CFrame = pillar.CFrame * CFrame.new(0, -10.7, 0),
+			Color = C.FloorTrim,
+			Material = Enum.Material.Metal,
+		})
+	end
+
+	-- Overhead light bars, out of frame but casting soft fill on the pads.
+	for _, x in { -9, 0, 9 } do
+		local bar = part(merge(neon(Color3.fromRGB(200, 225, 255), 0.2), {
+			Name = "CeilingBar",
+			Size = Vector3.new(6, 0.25, 0.6),
+			CFrame = CFrame.new(x, 19, 2),
+		}))
+		local fill = Instance.new("SurfaceLight")
+		fill.Face = Enum.NormalId.Bottom
+		fill.Color = Color3.fromRGB(170, 200, 255)
+		fill.Brightness = 0.8
+		fill.Range = 22
+		fill.Angle = 70
+		fill.Parent = bar
+	end
+end
+
+local function buildDust()
+	local volume = part({
+		Name = "DustVolume",
+		Size = Vector3.new(44, 12, 22),
+		CFrame = CFrame.new(0, 7, -2),
+		Transparency = 1,
+	})
+	local dust = Instance.new("ParticleEmitter")
+	dust.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+	dust.Rate = 14
+	dust.Lifetime = NumberRange.new(7, 12)
+	dust.Speed = NumberRange.new(0.15, 0.5)
+	dust.SpreadAngle = Vector2.new(180, 180)
+	dust.Size = NumberSequence.new(0.12)
+	dust.LightEmission = 1
+	dust.Color = ColorSequence.new(Color3.fromRGB(140, 220, 255))
+	dust.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 1),
+		NumberSequenceKeypoint.new(0.3, 0.55),
+		NumberSequenceKeypoint.new(0.7, 0.55),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	dust.Shape = Enum.ParticleEmitterShape.Box
+	dust.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
+	dust.Parent = volume
+end
+
+----------------------------------------------------------------------------
+-- Party pads
+----------------------------------------------------------------------------
+
+local function buildPad(index: number, slot: { Position: Vector3, Radius: number, Hero: boolean })
+	local folder = Instance.new("Folder")
+	folder.Name = "Slot" .. index
+	folder:SetAttribute("Slot", index)
+	folder:SetAttribute("Hero", slot.Hero)
+	folder.Parent = root
+
+	local accent = slot.Hero and C.Amber or C.Cyan
+	local r = slot.Radius
+	local origin = slot.Position + Vector3.new(0, 0.25, 0) -- on top of the stage
+
+	-- Floor light pool.
+	disc(origin, r * 2 + 4, 0.02, merge(neon(accent, slot.Hero and 0.84 or 0.9), { Name = "Halo" }), folder)
+	-- Body.
+	disc(origin, r * 2 + 0.8, 0.5, { Name = "Base", Color = C.Metal, Material = Enum.Material.Metal, Reflectance = 0.08 }, folder)
+	local ring = disc(origin + Vector3.new(0, 0.5, 0), r * 2 + 0.35, 0.12, merge(neon(accent), { Name = "Ring" }), folder)
+	disc(origin + Vector3.new(0, 0.62, 0), r * 2, 0.22, { Name = "Top", Color = C.PadTop, Reflectance = 0.12 }, folder)
+	-- Engraved inner ring on the top face.
+	local topY = origin.Y + 0.84
+	disc(Vector3.new(origin.X, topY, origin.Z), r * 1.35, 0.02, merge(neon(accent, 0.45), { Name = "InnerRing" }), folder)
+	disc(Vector3.new(origin.X, topY + 0.01, origin.Z), r * 1.27, 0.02, { Name = "InnerFill", Color = C.PadTop, Reflectance = 0.12 }, folder)
+
+	-- Light pips around the base.
+	for k = 0, 11 do
+		local a = k / 12 * math.pi * 2
+		local p = origin + Vector3.new(math.cos(a) * (r + 0.42), 0.25, math.sin(a) * (r + 0.42))
+		part(merge(neon(accent, 0.2), {
+			Name = "Pip",
+			Size = Vector3.new(0.12, 0.18, 0.5),
+			CFrame = CFrame.lookAt(p, Vector3.new(origin.X, p.Y, origin.Z)),
+		}), folder)
+	end
+
+	local glow = Instance.new("PointLight")
+	glow.Color = accent
+	glow.Brightness = slot.Hero and 2.4 or 1.4
+	glow.Range = slot.Hero and 12 or 9
+	glow.Parent = ring
+
+	-- Where the client attaches nameplates / invite buttons.
+	local anchor = part({
+		Name = "Anchor",
+		Size = Vector3.new(0.2, 0.2, 0.2),
+		CFrame = CFrame.new(origin.X, topY, origin.Z),
+		Transparency = 1,
+	}, folder)
+
+	if slot.Hero then
+		-- Key light from above-front and a cool rim from behind.
+		local key = part({
+			Name = "KeyLight",
+			Size = Vector3.new(0.5, 0.5, 0.5),
+			CFrame = CFrame.lookAt(origin + Vector3.new(3, 15, 9), origin + Vector3.new(0, 2.5, 0)),
+			Transparency = 1,
+		}, folder)
+		local spot = Instance.new("SpotLight")
+		spot.Face = Enum.NormalId.Front
+		spot.Color = Color3.fromRGB(255, 236, 210)
+		spot.Brightness = 5
+		spot.Range = 26
+		spot.Angle = 32
+		spot.Shadows = true
+		spot.Parent = key
+
+		local rim = part({
+			Name = "RimLight",
+			Size = Vector3.new(0.5, 0.5, 0.5),
+			CFrame = CFrame.lookAt(origin + Vector3.new(-2, 7, -6), origin + Vector3.new(0, 3, 0)),
+			Transparency = 1,
+		}, folder)
+		local rimSpot = Instance.new("SpotLight")
+		rimSpot.Face = Enum.NormalId.Front
+		rimSpot.Color = C.Cyan
+		rimSpot.Brightness = 4
+		rimSpot.Range = 14
+		rimSpot.Angle = 50
+		rimSpot.Parent = rim
+
+		local spawn = Instance.new("SpawnLocation")
+		spawn.Name = "HeroSpawn"
+		spawn.Anchored = true
+		spawn.CanCollide = false
+		spawn.Transparency = 1
+		spawn.Size = Vector3.new(4, 0.2, 4)
+		spawn.CFrame = CFrame.new(origin.X, topY + 0.1, origin.Z)
+		spawn.Duration = 0
+		spawn.Neutral = true
+		spawn.Parent = folder
+	else
+		-- Holographic column above the empty pad.
+		local beamHeight = 9
+		disc(Vector3.new(origin.X, topY, origin.Z), r * 1.25, beamHeight, merge(neon(C.Cyan, 0.94), {
+			Name = "HoloBeam",
+			CastShadow = false,
+		}), folder)
+		disc(Vector3.new(origin.X, topY, origin.Z), r * 0.5, beamHeight * 0.75, merge(neon(C.Cyan, 0.96), {
+			Name = "HoloCore",
+		}), folder)
+	end
+
+	return anchor
+end
+
+----------------------------------------------------------------------------
+-- Character staging
+----------------------------------------------------------------------------
+
+local function stageCharacter(character: Model)
+	local humanoid = character:WaitForChild("Humanoid", 10) :: Humanoid?
+	local hrp = character:WaitForChild("HumanoidRootPart", 10) :: BasePart?
+	if not humanoid or not hrp then
+		return
+	end
+
+	local slot = Theme.Lobby.Slots[1]
+	local topY = slot.Position.Y + 0.25 + 0.84
+	local feetToRoot = if humanoid.RigType == Enum.HumanoidRigType.R6 then 3 else humanoid.HipHeight + hrp.Size.Y / 2
+	local pos = Vector3.new(slot.Position.X, topY + feetToRoot, slot.Position.Z)
+	-- Angle toward the camera for a 3/4 hero stance.
+	local facing = Vector3.new(CAMERA_POS.X + 3, pos.Y, CAMERA_POS.Z)
+
+	humanoid.WalkSpeed = 0
+	humanoid.UseJumpPower = true
+	humanoid.JumpPower = 0
+	humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+	humanoid.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
+
+	local stance = CFrame.lookAt(pos, facing)
+	hrp.Anchored = true
+	character:PivotTo(stance)
+	-- Spawn placement can land a frame later; re-apply once it settles.
+	task.delay(0.2, function()
+		if character.Parent then
+			character:PivotTo(stance)
+		end
+	end)
+end
+
+----------------------------------------------------------------------------
+-- Build
+----------------------------------------------------------------------------
+
+local existing = workspace:FindFirstChild("HelixLobby")
+if existing then
+	existing:Destroy()
+end
+local baseplate = workspace:FindFirstChild("Baseplate")
+if baseplate then
+	baseplate:Destroy()
+end
+
+setupLighting()
+buildFloor()
+buildWall()
+buildPillars()
+buildDust()
+for index, slot in Theme.Lobby.Slots do
+	buildPad(index, slot)
+end
+root.Parent = workspace
+
+local function onPlayer(player: Player)
+	player.CharacterAdded:Connect(stageCharacter)
+	if player.Character then
+		task.spawn(stageCharacter, player.Character)
+	end
+end
+Players.PlayerAdded:Connect(onPlayer)
+for _, player in Players:GetPlayers() do
+	onPlayer(player)
+end
+]]></string>
+        </Properties>
+      </Item>
+    </Item>
+  </Item>
+  <Item class="StarterPlayer" referent="8">
+    <Properties>
+      <string name="Name">StarterPlayer</string>
+    </Properties>
+    <Item class="StarterPlayerScripts" referent="9">
+      <Properties>
+        <string name="Name">StarterPlayerScripts</string>
+      </Properties>
+      <Item class="Folder" referent="10">
+        <Properties>
+          <string name="Name">LobbyClient</string>
+        </Properties>
+        <Item class="ModuleScript" referent="11">
+          <Properties>
+            <string name="Name">CameraRig</string>
+            <string name="Source"><![CDATA[--!strict
+-- Scripted menu camera: eased transitions between named shots, a slow idle
+-- drift, and subtle mouse parallax so the scene feels alive.
+
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Theme = require(ReplicatedStorage:WaitForChild("LobbyShared"):WaitForChild("Theme"))
+
+local CameraRig = {}
+
+type Shot = { CFrame: CFrame, Fov: number }
+
+local hero = Theme.Lobby.Slots[1].Position + Vector3.new(0, 1.1, 0)
+
+local SHOTS: { [string]: Shot } = {
+	-- Full party framing.
+	Wide = {
+		CFrame = CFrame.lookAt(Vector3.new(0, 6.2, 25), Vector3.new(0, 3.3, 0)),
+		Fov = 40,
+	},
+	-- Close on the hero, pushed to screen-right so left-side panels don't cover them.
+	Focus = {
+		CFrame = CFrame.lookAt(hero + Vector3.new(1.5, 3.2, 12.5), hero + Vector3.new(0, 2.5, 0))
+			* CFrame.Angles(0, math.rad(17), 0),
+		Fov = 42,
+	},
+	-- Intro starting point: high and far, dollies into Wide.
+	Intro = {
+		CFrame = CFrame.lookAt(Vector3.new(-6, 12, 42), Vector3.new(0, 4, 0)),
+		Fov = 50,
+	},
+}
+
+local camera = workspace.CurrentCamera
+local current: CFrame = SHOTS.Intro.CFrame
+local currentFov = SHOTS.Intro.Fov
+local target: Shot = SHOTS.Intro
+local speed = 2.2
+local parallax = Vector2.zero
+
+function CameraRig.setShot(name: string, transitionSpeed: number?)
+	local shot = SHOTS[name] or SHOTS.Wide
+	if shot == target and not transitionSpeed then
+		return -- already heading there; keep the current easing
+	end
+	target = shot
+	speed = transitionSpeed or 3.2
+end
+
+function CameraRig.start()
+	camera.CameraType = Enum.CameraType.Scriptable
+	camera.CFrame = current
+	camera.FieldOfView = currentFov
+
+	RunService:BindToRenderStep("HelixMenuCamera", Enum.RenderPriority.Camera.Value + 1, function(dt: number)
+		camera.CameraType = Enum.CameraType.Scriptable
+
+		local alpha = 1 - math.exp(-dt * speed)
+		current = current:Lerp(target.CFrame, alpha)
+		currentFov += (target.Fov - currentFov) * alpha
+
+		-- Mouse parallax, normalized to -1..1 around screen center.
+		local viewport = camera.ViewportSize
+		local mouse = UserInputService:GetMouseLocation()
+		local goal = Vector2.new(
+			math.clamp((mouse.X / math.max(viewport.X, 1)) * 2 - 1, -1, 1),
+			math.clamp((mouse.Y / math.max(viewport.Y, 1)) * 2 - 1, -1, 1)
+		)
+		parallax = parallax:Lerp(goal, 1 - math.exp(-dt * 2.5))
+
+		local t = os.clock()
+		local drift = CFrame.new(math.sin(t * 0.21) * 0.25, math.sin(t * 0.33) * 0.12, 0)
+			* CFrame.Angles(math.sin(t * 0.27) * 0.004, math.sin(t * 0.19) * 0.006, 0)
+		local sway = CFrame.new(parallax.X * 0.45, -parallax.Y * 0.2, 0)
+			* CFrame.Angles(-parallax.Y * 0.008, -parallax.X * 0.012, 0)
+
+		camera.CFrame = current * drift * sway
+		camera.FieldOfView = currentFov
+	end)
+end
+
+return CameraRig
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="12">
+          <Properties>
+            <string name="Name">Icons</string>
+            <string name="Source"><![CDATA[--!strict
+-- Flat vector-style icons built from Frames, so the prototype needs no
+-- uploaded image assets. Each icon fills a square container.
+
+local UI = require(script.Parent.UI)
+
+local Icons = {}
+
+type Rect = { number } -- { x, y, w, h, rotation?, cornerScale? } in 0..1 space
+
+local SHAPES: { [string]: { Rect } } = {
+	rifle = {
+		{ 0.16, 0.40, 0.58, 0.13, 0, 0.2 }, -- receiver
+		{ 0.72, 0.435, 0.24, 0.05, 0, 0 }, -- barrel
+		{ 0.03, 0.42, 0.16, 0.17, -6, 0.2 }, -- stock
+		{ 0.46, 0.52, 0.08, 0.2, 12, 0.2 }, -- mag
+		{ 0.29, 0.52, 0.06, 0.16, -16, 0.3 }, -- grip
+		{ 0.34, 0.31, 0.24, 0.06, 0, 0.5 }, -- optic
+		{ 0.40, 0.36, 0.04, 0.05, 0, 0 },
+	},
+	smg = {
+		{ 0.22, 0.38, 0.46, 0.15, 0, 0.2 },
+		{ 0.66, 0.42, 0.18, 0.06, 0, 0 },
+		{ 0.08, 0.41, 0.15, 0.08, 0, 0.2 },
+		{ 0.48, 0.52, 0.07, 0.26, 4, 0.2 },
+		{ 0.3, 0.52, 0.07, 0.15, -14, 0.3 },
+	},
+	pistol = {
+		{ 0.22, 0.34, 0.56, 0.13, 0, 0.2 },
+		{ 0.25, 0.45, 0.15, 0.32, -12, 0.25 },
+		{ 0.4, 0.46, 0.12, 0.08, 0, 0.5 },
+	},
+	knife = {
+		{ 0.38, 0.44, 0.56, 0.09, -28, 0.5 },
+		{ 0.06, 0.6, 0.3, 0.1, -28, 0.4 },
+		{ 0.33, 0.5, 0.04, 0.2, -28, 0.3 },
+	},
+	gadget = {
+		{ 0.3, 0.36, 0.4, 0.44, 0, 1 },
+		{ 0.42, 0.26, 0.16, 0.12, 0, 0.2 },
+		{ 0.56, 0.2, 0.18, 0.05, 30, 0.5 },
+	},
+	skin = {
+		{ 0.32, 0.28, 0.36, 0.52, 0, 0.25 },
+		{ 0.16, 0.3, 0.16, 0.36, 14, 0.4 },
+		{ 0.68, 0.3, 0.16, 0.36, -14, 0.4 },
+		{ 0.42, 0.18, 0.16, 0.08, 0, 0.5 },
+	},
+	accessory = {
+		{ 0.12, 0.4, 0.34, 0.2, 0, 0.5 },
+		{ 0.54, 0.4, 0.34, 0.2, 0, 0.5 },
+		{ 0.44, 0.45, 0.12, 0.05, 0, 0 },
+	},
+	assault = {
+		{ 0.47, 0.12, 0.06, 0.26, 0, 0 },
+		{ 0.47, 0.62, 0.06, 0.26, 0, 0 },
+		{ 0.12, 0.47, 0.26, 0.06, 0, 0 },
+		{ 0.62, 0.47, 0.26, 0.06, 0, 0 },
+		{ 0.44, 0.44, 0.12, 0.12, 0, 1 },
+	},
+	scout = {
+		{ 0.3, 0.3, 0.4, 0.4, 45, 0.15 },
+	},
+	support = {
+		{ 0.4, 0.16, 0.2, 0.68, 0, 0.2 },
+		{ 0.16, 0.4, 0.68, 0.2, 0, 0.2 },
+	},
+	defender = {
+		{ 0.26, 0.2, 0.48, 0.42, 0, 0.15 },
+		{ 0.32, 0.38, 0.36, 0.36, 45, 0.15 },
+	},
+	recon = {
+		{ 0.18, 0.3, 0.3, 0.12, 40, 0.5 },
+		{ 0.52, 0.3, 0.3, 0.12, -40, 0.5 },
+		{ 0.18, 0.54, 0.3, 0.12, 40, 0.5 },
+		{ 0.52, 0.54, 0.3, 0.12, -40, 0.5 },
+	},
+	trophy = {
+		{ 0.28, 0.18, 0.44, 0.38, 0, 0.45 },
+		{ 0.45, 0.54, 0.1, 0.16, 0, 0 },
+		{ 0.32, 0.7, 0.36, 0.1, 0, 0.3 },
+	},
+	star = {
+		{ 0.3, 0.3, 0.4, 0.4, 45, 0.1 },
+		{ 0.3, 0.3, 0.4, 0.4, 0, 0.1 },
+	},
+}
+
+-- Hollow ring used by a few icons (e.g. the scout lens).
+local RINGS: { [string]: { number } } = {
+	scout = { 0.5, 0.5, 0.18 },
+	assault = { 0.5, 0.5, 0.3 },
+}
+
+function Icons.draw(kind: string, parent: Instance, color: Color3, props: UI.Props?): Frame
+	local p: UI.Props = {
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		Parent = parent,
+	}
+	if props then
+		for k, v in props do
+			p[k] = v
+		end
+	end
+	local holder: Frame = UI.new("Frame", p)
+	UI.new("UIAspectRatioConstraint", { AspectRatio = 1, Parent = holder })
+
+	for _, r in SHAPES[kind] or SHAPES.star do
+		local w, h = r[3], r[4]
+		local rect = UI.new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(r[1] + w / 2, r[2] + h / 2),
+			Size = UDim2.fromScale(w, h),
+			Rotation = r[5] or 0,
+			BackgroundColor3 = color,
+			Parent = holder,
+		})
+		local cornerScale = r[6] or 0
+		if cornerScale > 0 then
+			UI.new("UICorner", { CornerRadius = UDim.new(cornerScale * 0.5, 0), Parent = rect })
+		end
+	end
+
+	local ring = RINGS[kind]
+	if ring then
+		UI.new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(ring[1], ring[2]),
+			Size = UDim2.fromScale(ring[3] * 2, ring[3] * 2),
+			BackgroundTransparency = 1,
+			Parent = holder,
+		}, {
+			UI.new("UICorner", { CornerRadius = UDim.new(0.5, 0) }),
+			UI.new("UIStroke", { Color = color, Thickness = 3 }),
+		})
+	end
+
+	return holder
+end
+
+return Icons
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="LocalScript" referent="13">
+          <Properties>
+            <string name="Name">Main</string>
+            <string name="Source"><![CDATA[--!strict
+-- HELIX menu entry point. Builds the UI shell, wires the top navigation to
+-- the seven fake pages, and drives the camera / post-FX per page.
+
+local Lighting = game:GetService("Lighting")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local StarterGui = game:GetService("StarterGui")
+local UserInputService = game:GetService("UserInputService")
+
+local Theme = require(ReplicatedStorage:WaitForChild("LobbyShared"):WaitForChild("Theme"))
+local UI = require(script.Parent.UI)
+local Toast = require(script.Parent.Toast)
+local TopBar = require(script.Parent.TopBar)
+local CameraRig = require(script.Parent.CameraRig)
+local SlotBillboards = require(script.Parent.SlotBillboards)
+local Types = require(script.Parent.Pages.Types)
+local C = Theme.Colors
+local F = Theme.Fonts
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui") :: PlayerGui
+
+-- Layouts: "lobby" keeps the scene clear, "focus" uses the left 60% while the
+-- camera frames the hero on the right, "full" centres a wide panel over a
+-- blurred scene.
+type Layout = "lobby" | "focus" | "full"
+type PageDef = { Name: string, Layout: Layout, Badge: string?, Build: (Frame, Types.Ctx) -> () }
+
+local Pages = script.Parent.Pages
+local PAGES: { PageDef } = {
+	{ Name = "Lobby", Layout = "lobby", Build = require(Pages.Lobby) },
+	{ Name = "Loadout", Layout = "focus", Build = require(Pages.Loadout) },
+	{ Name = "Operators", Layout = "focus", Build = require(Pages.Operators) },
+	{ Name = "Shop", Layout = "full", Badge = "NEW", Build = require(Pages.Shop) },
+	{ Name = "Missions", Layout = "full", Badge = "dot", Build = require(Pages.Missions) },
+	{ Name = "Profile", Layout = "focus", Build = require(Pages.Profile) },
+	{ Name = "Settings", Layout = "full", Build = require(Pages.Settings) },
+}
+
+local DESIGN_HEIGHT = 1080
+local MIN_DESIGN_WIDTH = 1680
+
+----------------------------------------------------------------------------
+-- Core UI housekeeping
+----------------------------------------------------------------------------
+
+task.spawn(function()
+	for _ = 1, 20 do
+		local ok = pcall(function()
+			StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.All, false)
+		end)
+		if ok then
+			break
+		end
+		task.wait(0.25)
+	end
+end)
+
+task.spawn(function()
+	local ok, playerModule = pcall(function()
+		return require(player:WaitForChild("PlayerScripts"):WaitForChild("PlayerModule") :: ModuleScript) :: any
+	end)
+	if ok and playerModule then
+		playerModule:GetControls():Disable()
+	end
+end)
+
+----------------------------------------------------------------------------
+-- Shell
+----------------------------------------------------------------------------
+
+local screen: ScreenGui = UI.new("ScreenGui", {
+	Name = "HelixMenu",
+	IgnoreGuiInset = true,
+	ResetOnSpawn = false,
+	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+	Parent = playerGui,
+})
+
+-- Everything is authored against a 1080p-tall canvas and scaled to fit.
+local root: Frame = UI.new("Frame", {
+	Name = "Root",
+	BackgroundTransparency = 1,
+	Parent = screen,
+})
+local rootScale: UIScale = UI.new("UIScale", { Parent = root })
+
+local function fit()
+	local viewport = workspace.CurrentCamera.ViewportSize
+	if viewport.X < 2 or viewport.Y < 2 then
+		return
+	end
+	local scale = math.min(viewport.Y / DESIGN_HEIGHT, viewport.X / MIN_DESIGN_WIDTH)
+	rootScale.Scale = scale
+	root.Size = UDim2.fromOffset(viewport.X / scale, viewport.Y / scale)
+end
+fit()
+workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(fit)
+
+-- Cinematic vignettes (always on).
+UI.new("Frame", {
+	Name = "BottomShade",
+	AnchorPoint = Vector2.new(0, 1),
+	Position = UDim2.fromScale(0, 1),
+	Size = UDim2.new(1, 0, 0, 380),
+	BackgroundColor3 = C.Void,
+	Parent = root,
+}, { UI.gradient({ C.Void }, 270, NumberSequence.new(0.15, 1)) })
+for _, side in { 0, 1 } do
+	UI.new("Frame", {
+		Name = "SideShade",
+		AnchorPoint = Vector2.new(side, 0),
+		Position = UDim2.fromScale(side, 0),
+		Size = UDim2.new(0, 260, 1, 0),
+		BackgroundColor3 = C.Void,
+		Parent = root,
+	}, { UI.gradient({ C.Void }, if side == 0 then 0 else 180, NumberSequence.new(0.45, 1)) })
+end
+
+-- Per-layout backdrops.
+local focusShade: Frame = UI.new("Frame", {
+	Name = "FocusShade",
+	Size = UDim2.new(0.72, 0, 1, 0),
+	BackgroundColor3 = C.Void,
+	BackgroundTransparency = 1,
+	Parent = root,
+})
+local focusGradient = UI.gradient({ C.Void }, 0, NumberSequence.new({
+	NumberSequenceKeypoint.new(0, 0.05),
+	NumberSequenceKeypoint.new(0.7, 0.35),
+	NumberSequenceKeypoint.new(1, 1),
+}))
+focusGradient.Parent = focusShade
+local fullShade: Frame = UI.new("Frame", {
+	Name = "FullShade",
+	Size = UDim2.fromScale(1, 1),
+	BackgroundColor3 = C.Void,
+	BackgroundTransparency = 1,
+	Parent = root,
+})
+
+Toast.mount(root)
+
+local pageArea: Frame = UI.new("Frame", {
+	Name = "Pages",
+	Position = UDim2.fromOffset(40, TopBar.Height + 16),
+	Size = UDim2.new(1, -80, 1, -(TopBar.Height + 16 + 28)),
+	BackgroundTransparency = 1,
+	Parent = root,
+})
+
+----------------------------------------------------------------------------
+-- Post FX
+----------------------------------------------------------------------------
+
+local blur = Lighting:WaitForChild("MenuBlur", 10) :: BlurEffect?
+local dof = Lighting:FindFirstChildOfClass("DepthOfFieldEffect")
+
+local function applyLayoutFx(layout: Layout)
+	if layout == "focus" then
+		CameraRig.setShot("Focus")
+		UI.tween(focusShade, 0.5, { BackgroundTransparency = 0 })
+		UI.tween(fullShade, 0.5, { BackgroundTransparency = 1 })
+	elseif layout == "full" then
+		CameraRig.setShot("Wide")
+		UI.tween(focusShade, 0.5, { BackgroundTransparency = 1 })
+		UI.tween(fullShade, 0.5, { BackgroundTransparency = 0.45 })
+	else
+		CameraRig.setShot("Wide")
+		UI.tween(focusShade, 0.5, { BackgroundTransparency = 1 })
+		UI.tween(fullShade, 0.5, { BackgroundTransparency = 1 })
+	end
+	if blur then
+		UI.tween(blur, 0.6, { Size = if layout == "full" then 16 else 0 })
+	end
+	if dof then
+		UI.tween(dof, 0.8, {
+			FocusDistance = if layout == "focus" then 12.5 else 24,
+			InFocusRadius = if layout == "focus" then 5 else 16,
+			FarIntensity = if layout == "focus" then 0.55 else 0.3,
+		})
+	end
+	SlotBillboards.setVisible(layout == "lobby")
+end
+
+----------------------------------------------------------------------------
+-- Pages
+----------------------------------------------------------------------------
+
+local groups: { CanvasGroup } = {}
+local current = 0
+local switching = false
+local topBar: TopBar.TopBarApi
+
+local function playStagger(group: CanvasGroup)
+	for _, obj in group:GetDescendants() do
+		local order = obj:GetAttribute("Stagger")
+		if typeof(order) ~= "number" or not obj:IsA("GuiObject") then
+			continue
+		end
+		local parent = obj.Parent
+		if parent and parent:FindFirstChildWhichIsA("UIGridStyleLayout") then
+			continue
+		end
+		local base = obj:GetAttribute("BasePosition")
+		if typeof(base) ~= "UDim2" then
+			base = obj.Position
+			obj:SetAttribute("BasePosition", base)
+		end
+		local target = base :: UDim2
+		obj.Position = target + UDim2.fromOffset(0, 26)
+		task.delay(0.05 + order * 0.06, function()
+			UI.tween(obj, 0.55, { Position = target })
+		end)
+	end
+end
+
+local function switchTo(index: number)
+	if index == current or switching or not groups[index] then
+		return
+	end
+	switching = true
+	local direction = if index > current then 1 else -1
+	local old = groups[current]
+	local new = groups[index]
+	current = index
+	topBar.setSelected(index)
+	applyLayoutFx(PAGES[index].Layout)
+
+	if old then
+		UI.tween(old, 0.32, {
+			Position = UDim2.fromOffset(-direction * 140, 0),
+			GroupTransparency = 1,
+		}, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+		task.delay(0.32, function()
+			if groups[current] ~= old then
+				old.Visible = false
+			end
+		end)
+	end
+
+	new.Visible = true
+	new.Position = UDim2.fromOffset(direction * 180, 0)
+	new.GroupTransparency = 1
+	task.delay(if old then 0.12 else 0, function()
+		UI.tween(new, 0.55, { Position = UDim2.fromOffset(0, 0), GroupTransparency = 0 })
+		playStagger(new)
+	end)
+	task.delay(0.3, function()
+		switching = false
+	end)
+end
+
+local function indexOf(name: string): number?
+	for i, def in PAGES do
+		if def.Name == name then
+			return i
+		end
+	end
+	return nil
+end
+
+local ctx: Types.Ctx = {
+	toast = Toast.show,
+	goTo = function(name: string)
+		local i = indexOf(name)
+		if i then
+			switchTo(i)
+		end
+	end,
+	invite = function(slot: number)
+		Toast.show("Invite a friend", string.format("Slot %02d is open — invites are visual-only in this prototype.", slot), C.Cyan)
+	end,
+}
+
+for i, def in PAGES do
+	local group: CanvasGroup = UI.new("CanvasGroup", {
+		Name = def.Name,
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		GroupTransparency = 1,
+		Visible = false,
+		Parent = pageArea,
+	})
+	local content: Frame
+	if def.Layout == "lobby" then
+		content = UI.new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Parent = group })
+	elseif def.Layout == "focus" then
+		content = UI.new("Frame", { Size = UDim2.new(0, 1060, 1, 0), BackgroundTransparency = 1, Parent = group })
+	else
+		content = UI.new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0),
+			Position = UDim2.fromScale(0.5, 0),
+			Size = UDim2.new(0, 1600, 1, 0),
+			BackgroundTransparency = 1,
+			Parent = group,
+		})
+	end
+	content.Name = "Content"
+	def.Build(content, ctx)
+	groups[i] = group
+end
+
+local tabs: { TopBar.TabDef } = {}
+for _, def in PAGES do
+	table.insert(tabs, { Name = def.Name, Badge = def.Badge })
+end
+topBar = TopBar.build(root, tabs, switchTo, function()
+	ctx.goTo("Shop")
+end)
+
+UserInputService.InputBegan:Connect(function(input, processed)
+	if processed then
+		return
+	end
+	if input.KeyCode == Enum.KeyCode.Q then
+		switchTo(math.max(1, current - 1))
+	elseif input.KeyCode == Enum.KeyCode.E then
+		switchTo(math.min(#PAGES, current + 1))
+	end
+end)
+
+----------------------------------------------------------------------------
+-- Intro
+----------------------------------------------------------------------------
+
+local curtain: Frame = UI.new("Frame", {
+	Name = "Curtain",
+	Size = UDim2.fromScale(1, 1),
+	BackgroundColor3 = C.Void,
+	ZIndex = 100,
+	Parent = root,
+})
+local curtainTitle = UI.text({
+	Text = Theme.GameTitle,
+	Font = F.Display,
+	TextSize = 72,
+	TextColor3 = C.Text,
+	TextXAlignment = Enum.TextXAlignment.Center,
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	Position = UDim2.fromScale(0.5, 0.46),
+	Size = UDim2.fromOffset(800, 90),
+	ZIndex = 101,
+	Parent = curtain,
+})
+local curtainSub = UI.text({
+	Text = Theme.SeasonName,
+	Font = F.Bold,
+	TextSize = 16,
+	TextColor3 = C.Cyan,
+	TextXAlignment = Enum.TextXAlignment.Center,
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	Position = UDim2.fromScale(0.5, 0.54),
+	Size = UDim2.fromOffset(800, 20),
+	ZIndex = 101,
+	Parent = curtain,
+})
+local _, curtainBar = UI.progress(curtain, 0, C.Cyan, {
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	Position = UDim2.fromScale(0.5, 0.6),
+	Size = UDim2.fromOffset(240, 3),
+	ZIndex = 101,
+})
+
+local topBarFrame = root:WaitForChild("TopBar") :: Frame
+topBarFrame.Position = UDim2.fromOffset(0, -TopBar.Height - 30)
+
+CameraRig.start()
+SlotBillboards.build(ctx.invite)
+SlotBillboards.setVisible(false)
+
+UI.tween(curtainBar, 1.1, { Size = UDim2.fromScale(1, 1) }, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
+task.wait(1.2)
+
+-- Reveal: curtain fades, camera dollies in, UI drops into place.
+UI.tween(curtain, 1.0, { BackgroundTransparency = 1 }, Enum.EasingStyle.Sine)
+UI.tween(curtainTitle, 0.6, { TextTransparency = 1 })
+UI.tween(curtainSub, 0.6, { TextTransparency = 1 })
+UI.tween(curtainBar.Parent :: Frame, 0.4, { BackgroundTransparency = 1 })
+UI.tween(curtainBar, 0.4, { BackgroundTransparency = 1 })
+CameraRig.setShot("Wide", 1.6)
+task.delay(0.6, function()
+	UI.tween(topBarFrame, 0.8, { Position = UDim2.fromOffset(0, 0) })
+	switchTo(1)
+end)
+task.delay(1.2, function()
+	curtain:Destroy()
+end)
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="Folder" referent="14">
+          <Properties>
+            <string name="Name">Pages</string>
+          </Properties>
+          <Item class="ModuleScript" referent="15">
+            <Properties>
+              <string name="Name">Loadout</string>
+              <string name="Source"><![CDATA[--!strict
+-- LOADOUT: fake equipment page. Category slots on the left, item grid in the
+-- middle, detail + Equip on the right. All state is local and throwaway.
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Theme = require(ReplicatedStorage:WaitForChild("LobbyShared"):WaitForChild("Theme"))
+local UI = require(script.Parent.Parent.UI)
+local Icons = require(script.Parent.Parent.Icons)
+local Types = require(script.Parent.Types)
+local C = Theme.Colors
+local F = Theme.Fonts
+
+type Item = { Name: string, Rarity: string, Icon: string, Stats: { number }, Blurb: string }
+type Category = { Name: string, Items: { Item } }
+
+local STAT_NAMES = { "DAMAGE", "FIRE RATE", "RANGE", "MOBILITY" }
+
+local CATEGORIES: { Category } = {
+	{ Name = "Primary", Items = {
+		{ Name = "Halcyon AR", Rarity = "Epic", Icon = "rifle", Stats = { 0.72, 0.68, 0.7, 0.55 }, Blurb = "Balanced assault rifle with a crisp holo optic." },
+		{ Name = "VX-9 Striker", Rarity = "Rare", Icon = "rifle", Stats = { 0.64, 0.74, 0.6, 0.6 }, Blurb = "Fast-cycling rifle favoured by entry fraggers." },
+		{ Name = "Nightfall DMR", Rarity = "Legendary", Icon = "rifle", Stats = { 0.92, 0.38, 0.95, 0.42 }, Blurb = "Precision marksman platform. One tap, one story." },
+		{ Name = "Kestrel SMG", Rarity = "Common", Icon = "smg", Stats = { 0.48, 0.9, 0.35, 0.86 }, Blurb = "Compact and forgiving up close." },
+		{ Name = "Ripper SMG", Rarity = "Rare", Icon = "smg", Stats = { 0.55, 0.94, 0.3, 0.82 }, Blurb = "Shreds at short range. Hungry for ammo." },
+		{ Name = "Echo Carbine", Rarity = "Common", Icon = "rifle", Stats = { 0.58, 0.6, 0.62, 0.7 }, Blurb = "Reliable standard-issue carbine." },
+	} },
+	{ Name = "Secondary", Items = {
+		{ Name = "Vesper Auto", Rarity = "Rare", Icon = "pistol", Stats = { 0.42, 0.85, 0.35, 0.92 }, Blurb = "Machine pistol for panic moments." },
+		{ Name = "M7 Sidearm", Rarity = "Common", Icon = "pistol", Stats = { 0.45, 0.6, 0.45, 0.9 }, Blurb = "Dependable backup pistol." },
+		{ Name = "Duke .50", Rarity = "Epic", Icon = "pistol", Stats = { 0.88, 0.3, 0.6, 0.75 }, Blurb = "Hand cannon. Loud and decisive." },
+		{ Name = "Pulse Pistol", Rarity = "Legendary", Icon = "pistol", Stats = { 0.7, 0.62, 0.55, 0.85 }, Blurb = "Experimental energy sidearm." },
+	} },
+	{ Name = "Melee", Items = {
+		{ Name = "Arc Blade", Rarity = "Epic", Icon = "knife", Stats = { 0.8, 0.6, 0.12, 0.95 }, Blurb = "Charged edge with a cyan arc trail." },
+		{ Name = "Combat Knife", Rarity = "Common", Icon = "knife", Stats = { 0.6, 0.7, 0.1, 0.95 }, Blurb = "Standard field knife." },
+		{ Name = "Tanto", Rarity = "Rare", Icon = "knife", Stats = { 0.7, 0.65, 0.12, 0.92 }, Blurb = "Angular blade, quick draw." },
+		{ Name = "Ion Cleaver", Rarity = "Legendary", Icon = "knife", Stats = { 0.95, 0.4, 0.15, 0.8 }, Blurb = "Heavy, humming, unforgettable." },
+	} },
+	{ Name = "Gadget", Items = {
+		{ Name = "Recon Drone", Rarity = "Epic", Icon = "gadget", Stats = { 0.1, 0.4, 0.95, 0.8 }, Blurb = "Scouts ahead and pings enemies." },
+		{ Name = "Frag Grenade", Rarity = "Common", Icon = "gadget", Stats = { 0.85, 0.2, 0.5, 0.7 }, Blurb = "Classic. Cooks in 3 seconds." },
+		{ Name = "Flash Charge", Rarity = "Rare", Icon = "gadget", Stats = { 0.1, 0.3, 0.55, 0.75 }, Blurb = "Blinds anyone looking its way." },
+		{ Name = "Smoke Canister", Rarity = "Common", Icon = "gadget", Stats = { 0, 0.2, 0.6, 0.75 }, Blurb = "Instant cover for pushes and revives." },
+	} },
+	{ Name = "Skin", Items = {
+		{ Name = "Neon Vanguard", Rarity = "Legendary", Icon = "skin", Stats = { 0, 0, 0, 0 }, Blurb = "Season 01 signature suit with reactive glow." },
+		{ Name = "Standard Issue", Rarity = "Common", Icon = "skin", Stats = { 0, 0, 0, 0 }, Blurb = "Clean tactical fatigues." },
+		{ Name = "Arctic Ops", Rarity = "Rare", Icon = "skin", Stats = { 0, 0, 0, 0 }, Blurb = "White-out camo for cold insertions." },
+		{ Name = "Crimson Unit", Rarity = "Epic", Icon = "skin", Stats = { 0, 0, 0, 0 }, Blurb = "Elite red-trim officer kit." },
+	} },
+	{ Name = "Accessory", Items = {
+		{ Name = "Tac Visor", Rarity = "Rare", Icon = "accessory", Stats = { 0, 0, 0, 0 }, Blurb = "Tinted HUD visor." },
+		{ Name = "Holo Goggles", Rarity = "Epic", Icon = "accessory", Stats = { 0, 0, 0, 0 }, Blurb = "Projected lenses with scan-line shimmer." },
+		{ Name = "Field Cap", Rarity = "Common", Icon = "accessory", Stats = { 0, 0, 0, 0 }, Blurb = "Low-profile operator cap." },
+		{ Name = "Halo Crown", Rarity = "Legendary", Icon = "accessory", Stats = { 0, 0, 0, 0 }, Blurb = "Floating ring of light. Flex responsibly." },
+	} },
+}
+
+return function(page: Frame, ctx: Types.Ctx)
+	local equipped: { number } = {}
+	for i in CATEGORIES do
+		equipped[i] = 1
+	end
+	local categoryIndex = 1
+	local itemIndex = 1
+
+	-- Title ----------------------------------------------------------------
+	UI.stagger(UI.text({
+		Text = "LOADOUT",
+		Font = F.Display,
+		TextSize = 34,
+		Position = UDim2.fromOffset(0, 14),
+		Size = UDim2.fromOffset(400, 42),
+		Parent = page,
+	}), 0)
+	UI.stagger(UI.text({
+		Text = "KIT 01  ·  ASSAULT PRESET",
+		Font = F.Bold,
+		TextSize = 14,
+		TextColor3 = C.Cyan,
+		Position = UDim2.fromOffset(2, 58),
+		Size = UDim2.fromOffset(400, 18),
+		Parent = page,
+	}), 0)
+	for k = 1, 3 do
+		local preset = UI.button({
+			Position = UDim2.fromOffset(780 + (k - 1) * 52, 24),
+			Size = UDim2.fromOffset(44, 36),
+			TextSize = 14,
+			Parent = page,
+		}, if k == 1 then "accent" else "ghost", string.format("%02d", k))
+		preset.Activated:Connect(function()
+			ctx.toast("Kit " .. string.format("%02d", k), "Loadout presets are visual-only in this prototype.")
+		end)
+	end
+
+	local body = UI.new("Frame", {
+		Position = UDim2.fromOffset(0, 96),
+		Size = UDim2.fromOffset(1060, 640),
+		BackgroundTransparency = 1,
+		Parent = page,
+	})
+
+	-- Columns ----------------------------------------------------------------
+	local slotColumn = UI.new("Frame", {
+		Size = UDim2.fromOffset(300, 640),
+		BackgroundTransparency = 1,
+		Parent = body,
+	}, { UI.list(Enum.FillDirection.Vertical, 10) })
+	UI.stagger(slotColumn, 1)
+
+	local gridHolder = UI.panel({
+		Position = UDim2.fromOffset(320, 0),
+		Size = UDim2.fromOffset(420, 610),
+		Parent = body,
+	}, 16)
+	UI.stagger(gridHolder, 2)
+	local gridTitle = UI.header(gridHolder, "PRIMARY", { Position = UDim2.fromOffset(20, 16), Size = UDim2.new(1, -40, 0, 22) })
+	local gridTitleLabel = gridTitle:FindFirstChildOfClass("TextLabel") :: TextLabel
+	local grid = UI.new("Frame", {
+		Position = UDim2.fromOffset(20, 52),
+		Size = UDim2.new(1, -40, 1, -70),
+		BackgroundTransparency = 1,
+		Parent = gridHolder,
+	}, { UI.grid(UDim2.fromOffset(184, 170), 12) })
+
+	local detail = UI.panel({
+		Position = UDim2.fromOffset(760, 0),
+		Size = UDim2.fromOffset(300, 610),
+		Parent = body,
+	}, 16)
+	UI.stagger(detail, 3)
+
+	-- Detail panel contents (rebuilt on selection).
+	local detailContent = UI.new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Parent = detail })
+	local equipButton: TextButton = UI.button({
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.new(0.5, 0, 1, -20),
+		Size = UDim2.new(1, -40, 0, 52),
+		TextSize = 18,
+		Parent = detail,
+	}, "primary", "EQUIP")
+
+	local slotCards: { { frame: TextButton, stroke: UIStroke, name: TextLabel, rarity: Frame, icon: Frame } } = {}
+	local refreshSlots: () -> ()
+	local renderGrid: () -> ()
+
+	local function renderDetail()
+		detailContent:ClearAllChildren()
+		local item = CATEGORIES[categoryIndex].Items[itemIndex]
+		local color = Theme.Rarity[item.Rarity]
+
+		local hero = UI.new("Frame", {
+			Position = UDim2.fromOffset(16, 16),
+			Size = UDim2.new(1, -32, 0, 170),
+			BackgroundColor3 = Color3.new(1, 1, 1),
+			Parent = detailContent,
+		}, { UI.corner(12) })
+		UI.gradient({ color:Lerp(C.Void, 0.45), C.Void:Lerp(color, 0.08) }, 120).Parent = hero
+		Icons.draw(item.Icon, hero, Color3.new(1, 1, 1), {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromScale(0.78, 0.78),
+		})
+
+		UI.text({
+			Text = string.upper(item.Rarity),
+			Font = F.Heavy,
+			TextSize = 12,
+			TextColor3 = color,
+			Position = UDim2.fromOffset(20, 200),
+			Size = UDim2.new(1, -40, 0, 14),
+			Parent = detailContent,
+		})
+		UI.text({
+			Text = item.Name,
+			Font = F.Display,
+			TextSize = 20,
+			Position = UDim2.fromOffset(20, 216),
+			Size = UDim2.new(1, -40, 0, 28),
+			Parent = detailContent,
+		})
+		UI.text({
+			Text = item.Blurb,
+			Font = F.Medium,
+			TextSize = 14,
+			TextColor3 = C.TextDim,
+			TextWrapped = true,
+			TextYAlignment = Enum.TextYAlignment.Top,
+			Position = UDim2.fromOffset(20, 250),
+			Size = UDim2.new(1, -40, 0, 40),
+			Parent = detailContent,
+		})
+
+		local hasStats = item.Stats[1] + item.Stats[2] + item.Stats[3] + item.Stats[4] > 0
+		if hasStats then
+			for s, statName in STAT_NAMES do
+				local y = 304 + (s - 1) * 44
+				UI.text({
+					Text = statName,
+					Font = F.Bold,
+					TextSize = 12,
+					TextColor3 = C.TextDim,
+					Position = UDim2.fromOffset(20, y),
+					Size = UDim2.fromOffset(150, 14),
+					Parent = detailContent,
+				})
+				UI.text({
+					Text = tostring(math.floor(item.Stats[s] * 100)),
+					Font = F.Heavy,
+					TextSize = 13,
+					TextXAlignment = Enum.TextXAlignment.Right,
+					Position = UDim2.new(1, -60, 0, y),
+					Size = UDim2.fromOffset(40, 14),
+					Parent = detailContent,
+				})
+				local _, fill = UI.progress(detailContent, 0, color, {
+					Position = UDim2.fromOffset(20, y + 20),
+					Size = UDim2.new(1, -40, 0, 6),
+				})
+				UI.tween(fill, 0.6 + s * 0.08, { Size = UDim2.fromScale(item.Stats[s], 1) })
+			end
+		else
+			UI.chip(detailContent, "COSMETIC  ·  NO STAT CHANGES", C.Cyan, { Position = UDim2.fromOffset(20, 306) })
+		end
+
+		local isEquipped = equipped[categoryIndex] == itemIndex
+		equipButton.Text = if isEquipped then "EQUIPPED" else "EQUIP"
+		equipButton.AutoButtonColor = false
+		;(equipButton:FindFirstChildOfClass("UIGradient") :: UIGradient).Color = if isEquipped
+			then ColorSequence.new(C.Green, Color3.fromRGB(20, 170, 110))
+			else ColorSequence.new(C.Amber, C.AmberDeep)
+	end
+
+	renderGrid = function()
+		grid:ClearAllChildren()
+		UI.grid(UDim2.fromOffset(184, 170), 12).Parent = grid
+		local category = CATEGORIES[categoryIndex]
+		gridTitleLabel.Text = string.upper(category.Name) .. "  ·  " .. #category.Items .. " OWNED"
+
+		for i, item in category.Items do
+			local color = Theme.Rarity[item.Rarity]
+			local isSelected = i == itemIndex
+			local card: TextButton = UI.new("TextButton", {
+				Text = "",
+				LayoutOrder = i,
+				BackgroundColor3 = if isSelected then C.PanelHover else C.PanelRaised,
+				Parent = grid,
+			}, { UI.corner(12) })
+			local stroke = UI.stroke(if isSelected then C.Cyan else C.Line, if isSelected then 0 else 0.88, if isSelected then 2 else 1)
+			stroke.Parent = card
+			UI.hover(card)
+
+			local art = UI.new("Frame", {
+				Position = UDim2.fromOffset(8, 8),
+				Size = UDim2.new(1, -16, 0, 104),
+				BackgroundColor3 = Color3.new(1, 1, 1),
+				Parent = card,
+			}, { UI.corner(8) })
+			UI.gradient({ color:Lerp(C.Void, 0.55), C.Void }, 110).Parent = art
+			Icons.draw(item.Icon, art, Color3.fromRGB(235, 240, 250), {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.fromScale(0.9, 0.9),
+			})
+			UI.new("Frame", {
+				Position = UDim2.new(0, 8, 0, 112),
+				Size = UDim2.new(1, -16, 0, 3),
+				BackgroundColor3 = color,
+				Parent = card,
+			})
+			UI.text({
+				Text = item.Name,
+				Font = F.Heavy,
+				TextSize = 15,
+				Position = UDim2.fromOffset(12, 122),
+				Size = UDim2.new(1, -24, 0, 18),
+				TextTruncate = Enum.TextTruncate.AtEnd,
+				Parent = card,
+			})
+			UI.text({
+				Text = string.upper(item.Rarity),
+				Font = F.Bold,
+				TextSize = 11,
+				TextColor3 = color,
+				Position = UDim2.fromOffset(12, 142),
+				Size = UDim2.new(1, -24, 0, 14),
+				Parent = card,
+			})
+			if equipped[categoryIndex] == i then
+				UI.chip(card, "EQUIPPED", C.Green, {
+					Position = UDim2.fromOffset(14, 14),
+					Size = UDim2.fromOffset(0, 20),
+					BackgroundTransparency = 0.7,
+				})
+			end
+
+			card.Activated:Connect(function()
+				itemIndex = i
+				renderGrid()
+				renderDetail()
+			end)
+		end
+	end
+
+	refreshSlots = function()
+		for i, slot in slotCards do
+			local isSelected = i == categoryIndex
+			local item = CATEGORIES[i].Items[equipped[i]]
+			slot.name.Text = item.Name
+			slot.rarity.BackgroundColor3 = Theme.Rarity[item.Rarity]
+			UI.tween(slot.stroke, 0.2, { Color = if isSelected then C.Cyan else C.Line, Transparency = if isSelected then 0 else 0.88 })
+			UI.tween(slot.frame, 0.2, { BackgroundColor3 = if isSelected then C.PanelHover else C.Panel })
+			slot.icon:Destroy()
+			slot.icon = Icons.draw(item.Icon, slot.frame, if isSelected then C.Cyan else C.TextDim, {
+				AnchorPoint = Vector2.new(1, 0.5),
+				Position = UDim2.new(1, -14, 0.5, 0),
+				Size = UDim2.fromOffset(64, 64),
+			})
+		end
+	end
+
+	for i, category in CATEGORIES do
+		local card: TextButton = UI.new("TextButton", {
+			Text = "",
+			LayoutOrder = i,
+			Size = UDim2.fromOffset(300, 92),
+			BackgroundColor3 = C.Panel,
+			BackgroundTransparency = 0.1,
+			Parent = slotColumn,
+		}, { UI.corner(12) })
+		local stroke = UI.stroke(C.Line, 0.88)
+		stroke.Parent = card
+		UI.hover(card)
+		local rarity = UI.new("Frame", {
+			Position = UDim2.fromOffset(0, 18),
+			Size = UDim2.fromOffset(3, 56),
+			BackgroundColor3 = C.Common,
+			Parent = card,
+		})
+		UI.text({
+			Text = string.upper(category.Name),
+			Font = F.Bold,
+			TextSize = 12,
+			TextColor3 = C.TextFaint,
+			Position = UDim2.fromOffset(18, 24),
+			Size = UDim2.fromOffset(180, 14),
+			Parent = card,
+		})
+		local name = UI.text({
+			Text = "",
+			Font = F.Heavy,
+			TextSize = 18,
+			Position = UDim2.fromOffset(18, 42),
+			Size = UDim2.fromOffset(190, 22),
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			Parent = card,
+		})
+		local icon = UI.new("Frame", { BackgroundTransparency = 1, Parent = card })
+		slotCards[i] = { frame = card, stroke = stroke, name = name, rarity = rarity, icon = icon }
+
+		card.Activated:Connect(function()
+			categoryIndex = i
+			itemIndex = equipped[i]
+			refreshSlots()
+			renderGrid()
+			renderDetail()
+		end)
+	end
+
+	equipButton.Activated:Connect(function()
+		if equipped[categoryIndex] == itemIndex then
+			return
+		end
+		equipped[categoryIndex] = itemIndex
+		local item = CATEGORIES[categoryIndex].Items[itemIndex]
+		ctx.toast("Equipped " .. item.Name, CATEGORIES[categoryIndex].Name .. " slot updated.", Theme.Rarity[item.Rarity])
+		refreshSlots()
+		renderGrid()
+		renderDetail()
+	end)
+
+	refreshSlots()
+	renderGrid()
+	renderDetail()
+end
+]]></string>
+            </Properties>
+          </Item>
+          <Item class="ModuleScript" referent="16">
+            <Properties>
+              <string name="Name">Lobby</string>
+              <string name="Source"><![CDATA[--!strict
+-- LOBBY: the hero page. Keeps the centre of the screen clear for the 3D
+-- party scene and frames it with a party strip, an event card and the
+-- Play call-to-action.
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+
+local Theme = require(ReplicatedStorage:WaitForChild("LobbyShared"):WaitForChild("Theme"))
+local UI = require(script.Parent.Parent.UI)
+local Types = require(script.Parent.Types)
+local C = Theme.Colors
+local F = Theme.Fonts
+
+local MODES = {
+	{ Name = "SQUAD ELIMINATION", Detail = "4-PLAYER SQUADS  ·  RANKED" },
+	{ Name = "EXTRACTION RAID", Detail = "PvE  ·  CO-OP  ·  HARD" },
+	{ Name = "TRAINING RANGE", Detail = "SOLO  ·  PRACTICE" },
+}
+local PRIVACY = { "FRIENDS ONLY", "INVITE ONLY", "PUBLIC" }
+local REGIONS = { { Name = "EU-WEST", Ping = 24 }, { Name = "NA-EAST", Ping = 88 }, { Name = "ASIA-SE", Ping = 142 } }
+
+-- Little "< VALUE >" cycler used for privacy / region / mode.
+local function cycler(parent: Instance, label: string, values: { string }, props: UI.Props, onChange: ((number) -> ())?)
+	local p = table.clone(props)
+	p.Parent = parent
+	local index = 1
+	local button: TextButton = UI.button(p, "ghost", "")
+	UI.text({
+		Text = label,
+		Font = F.Bold,
+		TextSize = 11,
+		TextColor3 = C.TextFaint,
+		Position = UDim2.fromOffset(14, 8),
+		Size = UDim2.new(1, -28, 0, 14),
+		Parent = button,
+	})
+	local value = UI.text({
+		Text = values[1],
+		Font = F.Heavy,
+		TextSize = 15,
+		Position = UDim2.fromOffset(14, 22),
+		Size = UDim2.new(1, -44, 0, 18),
+		Parent = button,
+	})
+	UI.text({
+		Text = ">",
+		Font = F.Heavy,
+		TextSize = 16,
+		TextColor3 = C.Cyan,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		Position = UDim2.new(0, 0, 0, 0),
+		Size = UDim2.new(1, -14, 1, 0),
+		Parent = button,
+	})
+	button.Activated:Connect(function()
+		index = index % #values + 1
+		value.Text = values[index]
+		value.Position = UDim2.fromOffset(24, 22)
+		UI.tween(value, 0.25, { Position = UDim2.fromOffset(14, 22) })
+		if onChange then
+			onChange(index)
+		end
+	end)
+	return button
+end
+
+local function eventCard(page: Instance, ctx: Types.Ctx)
+	local card: TextButton = UI.new("TextButton", {
+		Text = "",
+		Position = UDim2.fromOffset(0, 18),
+		Size = UDim2.fromOffset(400, 118),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		Parent = page,
+	}, { UI.corner(14), UI.stroke(C.Line, 0.85) })
+	UI.stagger(card, 1)
+	UI.gradient({ Color3.fromRGB(120, 24, 92), Color3.fromRGB(40, 22, 100), Color3.fromRGB(8, 60, 110) }, 15).Parent = card
+	UI.hover(card)
+
+	-- Diagonal light streaks.
+	for k = 0, 2 do
+		UI.new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.new(1, -70 + k * 26, 0.5, 0),
+			Size = UDim2.fromOffset(10, 200),
+			Rotation = 25,
+			BackgroundColor3 = Color3.new(1, 1, 1),
+			BackgroundTransparency = 0.88 + k * 0.03,
+			Parent = card,
+		})
+	end
+	card.ClipsDescendants = true
+
+	UI.chip(card, "LIMITED EVENT", C.Magenta, { Position = UDim2.fromOffset(16, 14), BackgroundTransparency = 0.6 })
+	UI.text({
+		Text = "NEON FRONTIER",
+		Font = F.Display,
+		TextSize = 24,
+		Position = UDim2.fromOffset(16, 46),
+		Size = UDim2.fromOffset(360, 30),
+		Parent = card,
+	})
+	UI.text({
+		Text = "Double XP weekend  ·  Ends in 2d 14h",
+		Font = F.Medium,
+		TextSize = 14,
+		TextColor3 = Color3.fromRGB(220, 200, 240),
+		Position = UDim2.fromOffset(16, 80),
+		Size = UDim2.fromOffset(360, 18),
+		Parent = card,
+	})
+	card.Activated:Connect(function()
+		ctx.goTo("Missions")
+	end)
+end
+
+local function partyStrip(page: Instance, ctx: Types.Ctx)
+	local strip = UI.panel({
+		AnchorPoint = Vector2.new(0, 1),
+		Position = UDim2.new(0, 0, 1, -6),
+		Size = UDim2.fromOffset(640, 156),
+		Parent = page,
+	}, 16)
+	UI.stagger(strip, 2)
+
+	UI.text({
+		Text = "SQUAD",
+		Font = F.Display,
+		TextSize = 16,
+		Position = UDim2.fromOffset(20, 16),
+		Size = UDim2.fromOffset(100, 20),
+		Parent = strip,
+	})
+	local count = UI.chip(strip, "1 / 4", C.Amber, { Position = UDim2.fromOffset(106, 14) })
+	count.BackgroundTransparency = 0.8
+	UI.text({
+		Text = "Invite friends to fill your squad",
+		Font = F.Medium,
+		TextSize = 13,
+		TextColor3 = C.TextFaint,
+		Position = UDim2.fromOffset(176, 16),
+		Size = UDim2.fromOffset(260, 22),
+		Parent = strip,
+	})
+
+	-- Four mini slots.
+	for i = 1, 4 do
+		local x = 20 + (i - 1) * 66
+		if i == 1 then
+			UI.headshot(strip, 54, C.Amber, { Position = UDim2.fromOffset(x, 56) })
+			UI.new("Frame", {
+				Position = UDim2.fromOffset(x + 40, 96),
+				Size = UDim2.fromOffset(12, 12),
+				BackgroundColor3 = C.Green,
+				Parent = strip,
+			}, { UI.corner(6), UI.stroke(C.Panel, 0, 2) })
+		else
+			local slot: TextButton = UI.new("TextButton", {
+				Text = "+",
+				Font = F.Heavy,
+				TextSize = 26,
+				TextColor3 = C.Cyan,
+				Position = UDim2.fromOffset(x, 56),
+				Size = UDim2.fromOffset(54, 54),
+				BackgroundColor3 = C.Cyan,
+				BackgroundTransparency = 0.9,
+				Parent = strip,
+			}, { UI.corner(27) })
+			local stroke = UI.stroke(C.Cyan, 0.5, 1.5)
+			stroke.Parent = slot
+			UI.hover(slot, function()
+				UI.tween(slot, 0.2, { BackgroundTransparency = 0.7 })
+				UI.tween(stroke, 0.2, { Transparency = 0 })
+			end, function()
+				UI.tween(slot, 0.2, { BackgroundTransparency = 0.9 })
+				UI.tween(stroke, 0.2, { Transparency = 0.5 })
+			end)
+			slot.Activated:Connect(function()
+				ctx.invite(i)
+			end)
+		end
+	end
+	UI.text({
+		Text = "YOU",
+		Font = F.Heavy,
+		TextSize = 11,
+		TextColor3 = C.Amber,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		Position = UDim2.fromOffset(20, 116),
+		Size = UDim2.fromOffset(54, 14),
+		Parent = strip,
+	})
+
+	-- Party controls.
+	local controls = UI.new("Frame", {
+		Position = UDim2.fromOffset(292, 54),
+		Size = UDim2.fromOffset(330, 80),
+		BackgroundTransparency = 1,
+		Parent = strip,
+	})
+	local invite = UI.button({
+		Position = UDim2.fromOffset(0, 0),
+		Size = UDim2.fromOffset(330, 34),
+		TextSize = 14,
+		Parent = controls,
+	}, "accent", "INVITE FRIENDS")
+	invite.Activated:Connect(function()
+		ctx.invite(2)
+	end)
+
+	cycler(controls, "PRIVACY", PRIVACY, {
+		Position = UDim2.fromOffset(0, 40),
+		Size = UDim2.fromOffset(160, 46),
+	}, function(i)
+		ctx.toast("Party privacy updated", "Your squad is now " .. string.lower(PRIVACY[i]) .. ".")
+	end)
+	local regionNames = {}
+	for _, r in REGIONS do
+		table.insert(regionNames, string.format("%s  %dms", r.Name, r.Ping))
+	end
+	cycler(controls, "REGION", regionNames, {
+		Position = UDim2.fromOffset(170, 40),
+		Size = UDim2.fromOffset(160, 46),
+	})
+end
+
+local function playCluster(page: Instance, ctx: Types.Ctx)
+	local cluster = UI.new("Frame", {
+		AnchorPoint = Vector2.new(1, 1),
+		Position = UDim2.new(1, 0, 1, -6),
+		Size = UDim2.fromOffset(420, 200),
+		BackgroundTransparency = 1,
+		Parent = page,
+	})
+	UI.stagger(cluster, 3)
+
+	-- Mode selector.
+	local mode = UI.panel({
+		Size = UDim2.fromOffset(420, 84),
+		Parent = cluster,
+	}, 14)
+	UI.text({
+		Text = "GAME MODE",
+		Font = F.Bold,
+		TextSize = 11,
+		TextColor3 = C.TextFaint,
+		Position = UDim2.fromOffset(20, 14),
+		Size = UDim2.fromOffset(200, 14),
+		Parent = mode,
+	})
+	local modeName = UI.text({
+		Text = MODES[1].Name,
+		Font = F.Display,
+		TextSize = 18,
+		Position = UDim2.fromOffset(20, 30),
+		Size = UDim2.fromOffset(300, 24),
+		Parent = mode,
+	})
+	local modeDetail = UI.text({
+		Text = MODES[1].Detail,
+		Font = F.Bold,
+		TextSize = 12,
+		TextColor3 = C.Cyan,
+		Position = UDim2.fromOffset(20, 56),
+		Size = UDim2.fromOffset(300, 16),
+		Parent = mode,
+	})
+	local modeIndex = 1
+	local function stepMode(dir: number)
+		modeIndex = (modeIndex - 1 + dir) % #MODES + 1
+		modeName.Text = MODES[modeIndex].Name
+		modeDetail.Text = MODES[modeIndex].Detail
+		modeName.Position = UDim2.fromOffset(20 + dir * 16, 30)
+		UI.tween(modeName, 0.3, { Position = UDim2.fromOffset(20, 30) })
+	end
+	for k, dir in { -1, 1 } do
+		local arrow = UI.button({
+			AnchorPoint = Vector2.new(1, 0.5),
+			Position = UDim2.new(1, k == 1 and -60 or -16, 0.5, 0),
+			Size = UDim2.fromOffset(38, 38),
+			TextSize = 18,
+			TextColor3 = C.Cyan,
+			Parent = mode,
+		}, "dark", dir < 0 and "<" or ">")
+		arrow.Activated:Connect(function()
+			stepMode(dir)
+		end)
+	end
+
+	-- PLAY.
+	local play: TextButton = UI.button({
+		AnchorPoint = Vector2.new(0, 1),
+		Position = UDim2.new(0, 0, 1, 0),
+		Size = UDim2.fromOffset(420, 100),
+		CornerRadius = 16,
+		ClipsDescendants = true,
+		Parent = cluster,
+	}, "primary", "")
+	local gradient = play:FindFirstChildOfClass("UIGradient") :: UIGradient
+	local playLabel = UI.text({
+		Text = "PLAY",
+		Font = F.Display,
+		TextSize = 40,
+		TextColor3 = C.Void,
+		Position = UDim2.fromOffset(30, 16),
+		Size = UDim2.fromOffset(300, 46),
+		Parent = play,
+	})
+	local playSub = UI.text({
+		Text = "SQUAD 1/4  ·  READY TO DEPLOY",
+		Font = F.Heavy,
+		TextSize = 13,
+		TextColor3 = Color3.fromRGB(70, 34, 0),
+		Position = UDim2.fromOffset(32, 64),
+		Size = UDim2.fromOffset(330, 18),
+		Parent = play,
+	})
+	-- Chevrons on the right.
+	local chevrons = UI.new("Frame", {
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -30, 0.5, 0),
+		Size = UDim2.fromOffset(60, 40),
+		BackgroundTransparency = 1,
+		Parent = play,
+	})
+	for k = 0, 2 do
+		local holder = UI.new("Frame", {
+			Position = UDim2.fromOffset(k * 18, 0),
+			Size = UDim2.fromOffset(20, 40),
+			BackgroundTransparency = 1,
+			Parent = chevrons,
+		})
+		for _, sign in { -1, 1 } do
+			UI.new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.new(0.5, 0, 0.5, sign * 7),
+				Size = UDim2.fromOffset(18, 5),
+				Rotation = sign * 45,
+				BackgroundColor3 = C.Void,
+				BackgroundTransparency = 0.15 + k * 0.25,
+				Parent = holder,
+			}, { UI.corner(2) })
+		end
+	end
+	-- Shine sweep.
+	local shine = UI.new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(0, -80, 0.5, 0),
+		Size = UDim2.fromOffset(60, 220),
+		Rotation = 20,
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BackgroundTransparency = 0.55,
+		Parent = play,
+	}, { UI.gradient({ Color3.new(1, 1, 1) }, 0, NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 1),
+		NumberSequenceKeypoint.new(0.5, 0),
+		NumberSequenceKeypoint.new(1, 1),
+	})) })
+	task.spawn(function()
+		while play.Parent do
+			shine.Position = UDim2.new(0, -80, 0.5, 0)
+			UI.tween(shine, 0.9, { Position = UDim2.new(1, 80, 0.5, 0) }, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
+			task.wait(3.5)
+		end
+	end)
+
+	-- Fake matchmaking state.
+	local searching = false
+	local started = 0
+	local connection: RBXScriptConnection? = nil
+	play.Activated:Connect(function()
+		searching = not searching
+		if searching then
+			started = os.clock()
+			gradient.Color = ColorSequence.new(C.Cyan, C.CyanDeep)
+			playLabel.Text = "SEARCHING"
+			playLabel.TextSize = 32
+			connection = RunService.Heartbeat:Connect(function()
+				local elapsed = math.floor(os.clock() - started)
+				playSub.Text = string.format("%02d:%02d  ·  CLICK TO CANCEL", elapsed // 60, elapsed % 60)
+			end)
+			ctx.toast("Matchmaking (demo)", "Visual only — no real queue in this prototype.", C.Cyan)
+		else
+			if connection then
+				connection:Disconnect()
+				connection = nil
+			end
+			gradient.Color = ColorSequence.new(C.Amber, C.AmberDeep)
+			playLabel.Text = "PLAY"
+			playLabel.TextSize = 40
+			playSub.Text = "SQUAD 1/4  ·  READY TO DEPLOY"
+		end
+		playSub.TextColor3 = if searching then Color3.fromRGB(0, 40, 70) else Color3.fromRGB(70, 34, 0)
+	end)
+end
+
+return function(page: Frame, ctx: Types.Ctx)
+	eventCard(page, ctx)
+	partyStrip(page, ctx)
+	playCluster(page, ctx)
+end
+]]></string>
+            </Properties>
+          </Item>
+          <Item class="ModuleScript" referent="17">
+            <Properties>
+              <string name="Name">Missions</string>
+              <string name="Source"><![CDATA[--!strict
+-- MISSIONS: fake task board. Season pass track on top, Daily and Weekly
+-- columns with progress bars and claimable rewards.
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Theme = require(ReplicatedStorage:WaitForChild("LobbyShared"):WaitForChild("Theme"))
+local UI = require(script.Parent.Parent.UI)
+local Icons = require(script.Parent.Parent.Icons)
+local Types = require(script.Parent.Types)
+local C = Theme.Colors
+local F = Theme.Fonts
+
+type Mission = { Title: string, Text: string, Progress: number, Goal: number, Xp: number, Coins: number, Icon: string }
+
+local DAILY: { Mission } = {
+	{ Title = "Squad Up", Text = "Play 3 matches with a full squad", Progress = 3, Goal = 3, Xp = 500, Coins = 150, Icon = "support" },
+	{ Title = "Sharpshooter", Text = "Land 50 headshots", Progress = 34, Goal = 50, Xp = 750, Coins = 200, Icon = "assault" },
+	{ Title = "Field Medic", Text = "Revive 5 teammates", Progress = 5, Goal = 5, Xp = 400, Coins = 100, Icon = "defender" },
+	{ Title = "Spearhead", Text = "Win a match as VEX", Progress = 0, Goal = 1, Xp = 600, Coins = 250, Icon = "star" },
+}
+
+local WEEKLY: { Mission } = {
+	{ Title = "Season Grinder", Text = "Win 15 matches", Progress = 9, Goal = 15, Xp = 4000, Coins = 1200, Icon = "trophy" },
+	{ Title = "Arsenal", Text = "Get 100 eliminations with rifles", Progress = 100, Goal = 100, Xp = 3000, Coins = 800, Icon = "rifle" },
+	{ Title = "Versatile", Text = "Play 10 matches across 3 operators", Progress = 6, Goal = 10, Xp = 2500, Coins = 600, Icon = "recon" },
+	{ Title = "Drop Zone", Text = "Extract 8 times in Extraction Raid", Progress = 2, Goal = 8, Xp = 3500, Coins = 1000, Icon = "scout" },
+}
+
+local function missionCard(parent: Instance, mission: Mission, order: number, accent: Color3, ctx: Types.Ctx)
+	local done = mission.Progress >= mission.Goal
+	local card = UI.panel({
+		LayoutOrder = order,
+		Size = UDim2.new(1, 0, 0, 100),
+		BackgroundTransparency = if done then 0.02 else 0.12,
+		Parent = parent,
+	}, 14)
+	local stroke = card:FindFirstChildOfClass("UIStroke") :: UIStroke
+	if done then
+		stroke.Color = C.Amber
+		stroke.Transparency = 0.45
+	end
+
+	local iconBox = UI.new("Frame", {
+		Position = UDim2.fromOffset(18, 20),
+		Size = UDim2.fromOffset(60, 60),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		Parent = card,
+	}, { UI.corner(12) })
+	UI.gradient({ accent:Lerp(C.Void, 0.5), accent:Lerp(C.Void, 0.82) }, 135).Parent = iconBox
+	Icons.draw(mission.Icon, iconBox, accent, {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromScale(0.72, 0.72),
+	})
+
+	UI.text({
+		Text = string.upper(mission.Title),
+		Font = F.Heavy,
+		TextSize = 17,
+		Position = UDim2.fromOffset(96, 18),
+		Size = UDim2.fromOffset(340, 20),
+		Parent = card,
+	})
+	UI.text({
+		Text = mission.Text,
+		Font = F.Medium,
+		TextSize = 14,
+		TextColor3 = C.TextDim,
+		Position = UDim2.fromOffset(96, 40),
+		Size = UDim2.fromOffset(340, 18),
+		Parent = card,
+	})
+	local _, fill = UI.progress(card, 0, if done then C.Amber else accent, {
+		Position = UDim2.fromOffset(96, 68),
+		Size = UDim2.fromOffset(300, 8),
+	})
+	UI.tween(fill, 0.9 + order * 0.1, { Size = UDim2.fromScale(mission.Progress / mission.Goal, 1) })
+	UI.text({
+		Text = string.format("%d / %d", mission.Progress, mission.Goal),
+		Font = F.Heavy,
+		TextSize = 13,
+		TextColor3 = if done then C.Amber else C.Text,
+		Position = UDim2.fromOffset(406, 62),
+		Size = UDim2.fromOffset(80, 18),
+		Parent = card,
+	})
+
+	-- Rewards.
+	local rewards = UI.new("Frame", {
+		Position = UDim2.fromOffset(470, 22),
+		Size = UDim2.fromOffset(120, 56),
+		BackgroundTransparency = 1,
+		Parent = card,
+	})
+	UI.diamond(rewards, C.Epic, 14, { Position = UDim2.fromOffset(3, 7) })
+	UI.text({
+		Text = UI.formatNumber(mission.Xp) .. " XP",
+		Font = F.Heavy,
+		TextSize = 14,
+		Position = UDim2.fromOffset(28, 2),
+		Size = UDim2.fromOffset(100, 24),
+		Parent = rewards,
+	})
+	UI.coin(rewards, C.Amber, 18, { Position = UDim2.fromOffset(1, 33) })
+	UI.text({
+		Text = UI.formatNumber(mission.Coins),
+		Font = F.Heavy,
+		TextSize = 14,
+		Position = UDim2.fromOffset(28, 30),
+		Size = UDim2.fromOffset(100, 24),
+		Parent = rewards,
+	})
+
+	local claim = UI.button({
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -18, 0.5, 0),
+		Size = UDim2.fromOffset(150, 48),
+		TextSize = 15,
+		Parent = card,
+	}, if done then "primary" else "ghost", if done then "CLAIM" else "IN PROGRESS")
+	if not done then
+		claim.TextColor3 = C.TextFaint
+	end
+
+	local claimed = false
+	claim.Activated:Connect(function()
+		if not done then
+			ctx.toast(mission.Title, string.format("%d more to go.", mission.Goal - mission.Progress), accent)
+			return
+		end
+		if claimed then
+			return
+		end
+		claimed = true
+		claim.Text = "CLAIMED"
+		local gradient = claim:FindFirstChildOfClass("UIGradient")
+		if gradient then
+			gradient.Color = ColorSequence.new(C.Green, Color3.fromRGB(20, 170, 110))
+		end
+		UI.tween(stroke, 0.3, { Color = C.Green, Transparency = 0.5 })
+		ctx.toast("Reward claimed", string.format("+%s XP  ·  +%s Credits", UI.formatNumber(mission.Xp), UI.formatNumber(mission.Coins)), C.Green)
+	end)
+end
+
+local function column(parent: Instance, x: number, title: string, reset: string, missions: { Mission }, accent: Color3, order: number, ctx: Types.Ctx)
+	local col = UI.new("Frame", {
+		Position = UDim2.fromOffset(x, 270),
+		Size = UDim2.fromOffset(790, 470),
+		BackgroundTransparency = 1,
+		Parent = parent,
+	})
+	UI.stagger(col, order)
+	local header = UI.header(col, title)
+	;(header:FindFirstChildOfClass("Frame") :: Frame).BackgroundColor3 = accent
+	UI.text({
+		Text = reset,
+		Font = F.Bold,
+		TextSize = 13,
+		TextColor3 = C.TextFaint,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		Position = UDim2.fromOffset(0, 0),
+		Size = UDim2.new(1, 0, 0, 22),
+		Parent = col,
+	})
+	local list = UI.new("Frame", {
+		Position = UDim2.fromOffset(0, 34),
+		Size = UDim2.new(1, 0, 1, -34),
+		BackgroundTransparency = 1,
+		Parent = col,
+	}, { UI.list(Enum.FillDirection.Vertical, 12) })
+	for k, mission in missions do
+		missionCard(list, mission, k, accent, ctx)
+	end
+end
+
+local function seasonTrack(parent: Instance, ctx: Types.Ctx)
+	local strip = UI.panel({
+		Position = UDim2.fromOffset(0, 96),
+		Size = UDim2.fromOffset(1600, 150),
+		Parent = parent,
+	}, 18)
+	UI.stagger(strip, 1)
+
+	UI.text({
+		Text = "SEASON PASS",
+		Font = F.Bold,
+		TextSize = 12,
+		TextColor3 = C.Amber,
+		Position = UDim2.fromOffset(28, 24),
+		Size = UDim2.fromOffset(200, 14),
+		Parent = strip,
+	})
+	UI.text({
+		Text = "TIER 12",
+		Font = F.Display,
+		TextSize = 34,
+		Position = UDim2.fromOffset(26, 42),
+		Size = UDim2.fromOffset(240, 42),
+		Parent = strip,
+	})
+	UI.text({
+		Text = "6,850 / 10,000 XP TO TIER 13",
+		Font = F.Bold,
+		TextSize = 13,
+		TextColor3 = C.TextDim,
+		Position = UDim2.fromOffset(28, 92),
+		Size = UDim2.fromOffset(240, 16),
+		Parent = strip,
+	})
+	UI.progress(strip, 0.685, C.Amber, { Position = UDim2.fromOffset(28, 116), Size = UDim2.fromOffset(220, 6) })
+
+	-- Tier nodes 8..17.
+	local track = UI.new("Frame", {
+		Position = UDim2.fromOffset(300, 30),
+		Size = UDim2.fromOffset(1020, 90),
+		BackgroundTransparency = 1,
+		Parent = strip,
+	})
+	UI.new("Frame", {
+		Position = UDim2.new(0, 30, 0, 34),
+		Size = UDim2.new(1, -60, 0, 4),
+		BackgroundColor3 = C.PanelHover,
+		Parent = track,
+	}, { UI.corner(2) })
+	UI.new("Frame", {
+		Position = UDim2.new(0, 30, 0, 34),
+		Size = UDim2.new(0, (1020 - 60) * (4.685 / 9), 0, 4),
+		BackgroundColor3 = C.Amber,
+		Parent = track,
+	}, { UI.corner(2) })
+	local icons = { "star", "rifle", "skin", "star", "accessory", "knife", "star", "gadget", "trophy", "skin" }
+	for k = 0, 9 do
+		local tier = 8 + k
+		local reached = tier <= 12
+		local x = 30 + k * (1020 - 60) / 9
+		local node = UI.new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromOffset(x, 36),
+			Size = UDim2.fromOffset(if tier == 12 then 60 else 50, if tier == 12 then 60 else 50),
+			BackgroundColor3 = if reached then C.Amber else C.PanelRaised,
+			BackgroundTransparency = if reached then 0.75 else 0.1,
+			Parent = track,
+		}, { UI.corner(12), UI.stroke(if reached then C.Amber else C.Line, if reached then 0.1 else 0.85, if tier == 12 then 2 else 1) })
+		Icons.draw(icons[k + 1], node, if reached then C.Amber else C.TextFaint, {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromScale(0.68, 0.68),
+		})
+		UI.text({
+			Text = tostring(tier),
+			Font = F.Heavy,
+			TextSize = 12,
+			TextColor3 = if reached then C.Text else C.TextFaint,
+			TextXAlignment = Enum.TextXAlignment.Center,
+			AnchorPoint = Vector2.new(0.5, 0),
+			Position = UDim2.fromOffset(x, 70),
+			Size = UDim2.fromOffset(40, 14),
+			Parent = track,
+		})
+	end
+
+	local premium = UI.button({
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -28, 0.5, 0),
+		Size = UDim2.fromOffset(220, 56),
+		TextSize = 15,
+		Parent = strip,
+	}, "primary", "GET PREMIUM PASS")
+	premium.Activated:Connect(function()
+		ctx.goTo("Shop")
+	end)
+end
+
+return function(content: Frame, ctx: Types.Ctx)
+	UI.stagger(UI.text({
+		Text = "MISSIONS",
+		Font = F.Display,
+		TextSize = 34,
+		Position = UDim2.fromOffset(0, 14),
+		Size = UDim2.fromOffset(400, 42),
+		Parent = content,
+	}), 0)
+	UI.stagger(UI.text({
+		Text = "COMPLETE MISSIONS TO EARN XP AND REWARDS",
+		Font = F.Bold,
+		TextSize = 14,
+		TextColor3 = C.Cyan,
+		Position = UDim2.fromOffset(2, 58),
+		Size = UDim2.fromOffset(600, 18),
+		Parent = content,
+	}), 0)
+
+	seasonTrack(content, ctx)
+	column(content, 0, "Daily", "RESETS IN 07:42:13", DAILY, C.Cyan, 2, ctx)
+	column(content, 810, "Weekly", "RESETS IN 3D 07H", WEEKLY, C.Epic, 3, ctx)
+end
+]]></string>
+            </Properties>
+          </Item>
+          <Item class="ModuleScript" referent="18">
+            <Properties>
+              <string name="Name">Operators</string>
+              <string name="Source"><![CDATA[--!strict
+-- OPERATORS: fake character select. A row of tall operator cards, role
+-- filters, and a detail strip with abilities and Select / Customize.
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Theme = require(ReplicatedStorage:WaitForChild("LobbyShared"):WaitForChild("Theme"))
+local UI = require(script.Parent.Parent.UI)
+local Icons = require(script.Parent.Parent.Icons)
+local Types = require(script.Parent.Types)
+local C = Theme.Colors
+local F = Theme.Fonts
+
+type Ability = { Name: string, Text: string }
+type Operator = {
+	Name: string,
+	Role: string,
+	Bio: string,
+	Locked: boolean,
+	Difficulty: number,
+	Abilities: { Ability },
+}
+
+local ROLE_COLORS: { [string]: Color3 } = {
+	Assault = C.Amber,
+	Scout = C.Cyan,
+	Support = C.Green,
+	Defender = C.Rare,
+	Recon = C.Epic,
+}
+local ROLE_ICONS: { [string]: string } = {
+	Assault = "assault",
+	Scout = "scout",
+	Support = "support",
+	Defender = "defender",
+	Recon = "recon",
+}
+
+local OPERATORS: { Operator } = {
+	{ Name = "VEX", Role = "Assault", Locked = false, Difficulty = 2,
+		Bio = "Former orbital marine. Breaks sieges with relentless forward pressure.",
+		Abilities = { { Name = "Overdrive", Text = "Boosts fire rate and sprint speed for 6s." }, { Name = "Breach Charge", Text = "Blasts through light cover." } } },
+	{ Name = "NOVA", Role = "Scout", Locked = false, Difficulty = 3,
+		Bio = "Signal ghost and route-finder. Always first through the door.",
+		Abilities = { { Name = "Blink", Text = "Short-range dash with afterimage." }, { Name = "Pulse Scan", Text = "Reveals nearby enemies briefly." } } },
+	{ Name = "ATLAS", Role = "Support", Locked = false, Difficulty = 1,
+		Bio = "Field engineer who keeps the squad stocked and standing.",
+		Abilities = { { Name = "Supply Drop", Text = "Calls an ammo and armor crate." }, { Name = "Mend Field", Text = "Heals allies inside the zone." } } },
+	{ Name = "BULWARK", Role = "Defender", Locked = false, Difficulty = 1,
+		Bio = "Walking fortress. Holds the line so others can play hero.",
+		Abilities = { { Name = "Aegis Wall", Text = "Deploys a hardlight barrier." }, { Name = "Anchor", Text = "Becomes immovable and gains armor." } } },
+	{ Name = "WRAITH", Role = "Recon", Locked = true, Difficulty = 3,
+		Bio = "Infiltrator who turns enemy intel against them.",
+		Abilities = { { Name = "Cloak", Text = "Near-invisibility while still." }, { Name = "Tap Wire", Text = "Hack a camera to spot through it." } } },
+	{ Name = "KADE", Role = "Assault", Locked = true, Difficulty = 2,
+		Bio = "Demolitions specialist with a short fuse and a long list.",
+		Abilities = { { Name = "Cluster Shot", Text = "Fires a splitting grenade." }, { Name = "Rally", Text = "Grants nearby allies bonus armor." } } },
+}
+
+local CARD_W, CARD_H, CARD_GAP = 162, 312, 17
+
+local function lockGlyph(parent: Instance)
+	local holder = UI.new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.42),
+		Size = UDim2.fromOffset(34, 40),
+		BackgroundTransparency = 1,
+		Parent = parent,
+	})
+	UI.new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.fromScale(0.5, 0),
+		Size = UDim2.fromOffset(22, 26),
+		BackgroundTransparency = 1,
+		Parent = holder,
+	}, { UI.corner(11), UI.stroke(C.Text, 0, 4) })
+	UI.new("Frame", {
+		Position = UDim2.fromOffset(0, 16),
+		Size = UDim2.fromOffset(34, 24),
+		BackgroundColor3 = C.Text,
+		Parent = holder,
+	}, { UI.corner(5) })
+end
+
+return function(page: Frame, ctx: Types.Ctx)
+	local selected = 1
+	local filter = "All"
+
+	UI.stagger(UI.text({
+		Text = "OPERATORS",
+		Font = F.Display,
+		TextSize = 34,
+		Position = UDim2.fromOffset(0, 14),
+		Size = UDim2.fromOffset(500, 42),
+		Parent = page,
+	}), 0)
+	UI.stagger(UI.text({
+		Text = "6 OPERATIVES  ·  4 UNLOCKED",
+		Font = F.Bold,
+		TextSize = 14,
+		TextColor3 = C.Cyan,
+		Position = UDim2.fromOffset(2, 58),
+		Size = UDim2.fromOffset(400, 18),
+		Parent = page,
+	}), 0)
+
+	-- Role filter chips.
+	local filters = UI.new("Frame", {
+		Position = UDim2.fromOffset(0, 96),
+		Size = UDim2.fromOffset(1060, 34),
+		BackgroundTransparency = 1,
+		Parent = page,
+	}, { UI.list(Enum.FillDirection.Horizontal, 8) })
+	UI.stagger(filters, 1)
+
+	local row = UI.new("Frame", {
+		Position = UDim2.fromOffset(0, 146),
+		Size = UDim2.fromOffset(1060, CARD_H),
+		BackgroundTransparency = 1,
+		Parent = page,
+	})
+	UI.stagger(row, 2)
+
+	local detail = UI.panel({
+		Position = UDim2.fromOffset(0, 146 + CARD_H + 20),
+		Size = UDim2.fromOffset(1060, 236),
+		Parent = page,
+	}, 16)
+	UI.stagger(detail, 3)
+
+	type CardRef = { button: TextButton, stroke: UIStroke, avatar: ImageLabel, scale: UIScale, op: Operator, shade: Frame }
+	local cards: { CardRef } = {}
+	local filterButtons: { [string]: TextButton } = {}
+
+	local detailContent = UI.new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Parent = detail })
+
+	local function renderDetail()
+		detailContent:ClearAllChildren()
+		local op = OPERATORS[selected]
+		local color = ROLE_COLORS[op.Role]
+
+		-- Left: identity.
+		local iconBox = UI.new("Frame", {
+			Position = UDim2.fromOffset(24, 24),
+			Size = UDim2.fromOffset(60, 60),
+			BackgroundColor3 = color,
+			BackgroundTransparency = 0.8,
+			Parent = detailContent,
+		}, { UI.corner(12), UI.stroke(color, 0.3, 1.5) })
+		Icons.draw(ROLE_ICONS[op.Role], iconBox, color, {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromScale(0.7, 0.7),
+		})
+		UI.text({
+			Text = op.Name,
+			Font = F.Display,
+			TextSize = 32,
+			Position = UDim2.fromOffset(100, 22),
+			Size = UDim2.fromOffset(300, 40),
+			Parent = detailContent,
+		})
+		UI.chip(detailContent, string.upper(op.Role), color, { Position = UDim2.fromOffset(100, 64) })
+		UI.text({
+			Text = op.Bio,
+			Font = F.Medium,
+			TextSize = 15,
+			TextColor3 = C.TextDim,
+			TextWrapped = true,
+			TextYAlignment = Enum.TextYAlignment.Top,
+			Position = UDim2.fromOffset(24, 104),
+			Size = UDim2.fromOffset(360, 60),
+			Parent = detailContent,
+		})
+		-- Difficulty pips.
+		UI.text({
+			Text = "DIFFICULTY",
+			Font = F.Bold,
+			TextSize = 12,
+			TextColor3 = C.TextFaint,
+			Position = UDim2.fromOffset(24, 184),
+			Size = UDim2.fromOffset(100, 14),
+			Parent = detailContent,
+		})
+		for k = 1, 3 do
+			UI.new("Frame", {
+				Position = UDim2.fromOffset(110 + (k - 1) * 30, 186),
+				Size = UDim2.fromOffset(24, 8),
+				BackgroundColor3 = if k <= op.Difficulty then color else C.PanelHover,
+				Parent = detailContent,
+			}, { UI.corner(4) })
+		end
+
+		-- Middle: abilities.
+		for a, ability in op.Abilities do
+			local y = 24 + (a - 1) * 96
+			local box = UI.new("Frame", {
+				Position = UDim2.fromOffset(420, y),
+				Size = UDim2.fromOffset(360, 84),
+				BackgroundColor3 = C.PanelRaised,
+				BackgroundTransparency = 0.2,
+				Parent = detailContent,
+			}, { UI.corner(12), UI.stroke(C.Line, 0.9) })
+			local key = UI.new("Frame", {
+				Position = UDim2.fromOffset(14, 14),
+				Size = UDim2.fromOffset(56, 56),
+				BackgroundColor3 = Color3.new(1, 1, 1),
+				Parent = box,
+			}, { UI.corner(10) })
+			UI.gradient({ color, color:Lerp(C.Void, 0.5) }, 135).Parent = key
+			UI.text({
+				Text = a == 1 and "Q" or "E",
+				Font = F.Display,
+				TextSize = 22,
+				TextColor3 = C.Void,
+				TextXAlignment = Enum.TextXAlignment.Center,
+				Size = UDim2.fromScale(1, 1),
+				Parent = key,
+			})
+			UI.text({
+				Text = string.upper(ability.Name),
+				Font = F.Heavy,
+				TextSize = 16,
+				Position = UDim2.fromOffset(84, 16),
+				Size = UDim2.fromOffset(260, 20),
+				Parent = box,
+			})
+			UI.text({
+				Text = ability.Text,
+				Font = F.Medium,
+				TextSize = 14,
+				TextColor3 = C.TextDim,
+				TextWrapped = true,
+				TextYAlignment = Enum.TextYAlignment.Top,
+				Position = UDim2.fromOffset(84, 40),
+				Size = UDim2.fromOffset(262, 36),
+				Parent = box,
+			})
+		end
+
+		-- Right: actions.
+		local selectText = if op.Locked then "UNLOCK  ·  1,200" else "SELECT"
+		local select = UI.button({
+			Position = UDim2.fromOffset(806, 24),
+			Size = UDim2.fromOffset(230, 60),
+			TextSize = 18,
+			Parent = detailContent,
+		}, "primary", selectText)
+		select.Activated:Connect(function()
+			if op.Locked then
+				ctx.goTo("Shop")
+			else
+				ctx.toast(op.Name .. " deployed", "Operator selected for your next match.", color)
+			end
+		end)
+		local customize = UI.button({
+			Position = UDim2.fromOffset(806, 96),
+			Size = UDim2.fromOffset(230, 48),
+			TextSize = 15,
+			Parent = detailContent,
+		}, "ghost", "CUSTOMIZE")
+		customize.Activated:Connect(function()
+			ctx.goTo("Loadout")
+		end)
+		UI.text({
+			Text = if op.Locked then "Unlock with Credits or the Season Pass." else "Mastery 3  ·  148 matches played",
+			Font = F.Medium,
+			TextSize = 13,
+			TextColor3 = C.TextFaint,
+			TextXAlignment = Enum.TextXAlignment.Center,
+			Position = UDim2.fromOffset(806, 160),
+			Size = UDim2.fromOffset(230, 16),
+			Parent = detailContent,
+		})
+	end
+
+	local function refreshCards()
+		for i, ref in cards do
+			local isSelected = i == selected
+			local matches = filter == "All" or ref.op.Role == filter
+			local color = ROLE_COLORS[ref.op.Role]
+			UI.tween(ref.stroke, 0.25, {
+				Color = if isSelected then color else C.Line,
+				Transparency = if isSelected then 0 else 0.86,
+				Thickness = if isSelected then 2.5 else 1,
+			})
+			UI.tween(ref.scale, 0.3, { Scale = if isSelected then 1.04 else 1 }, Enum.EasingStyle.Back)
+			UI.tween(ref.avatar, 0.3, {
+				ImageColor3 = if ref.op.Locked
+					then Color3.fromRGB(14, 16, 24)
+					elseif isSelected then Color3.new(1, 1, 1)
+					else color:Lerp(C.Void, 0.55),
+			})
+			UI.tween(ref.shade, 0.25, { BackgroundTransparency = if matches then 1 else 0.35 })
+		end
+		for name, button in filterButtons do
+			local active = name == filter
+			UI.tween(button, 0.2, {
+				BackgroundColor3 = if active then C.Cyan else C.Panel,
+				TextColor3 = if active then C.Void else C.TextDim,
+			})
+		end
+	end
+
+	for i, op in OPERATORS do
+		local color = ROLE_COLORS[op.Role]
+		local card: TextButton = UI.new("TextButton", {
+			Text = "",
+			Position = UDim2.fromOffset((i - 1) * (CARD_W + CARD_GAP), 0),
+			Size = UDim2.fromOffset(CARD_W, CARD_H),
+			BackgroundColor3 = Color3.new(1, 1, 1),
+			ClipsDescendants = true,
+			Parent = row,
+		}, { UI.corner(14) })
+		UI.gradient({ color:Lerp(C.Void, 0.62), C.Deep, C.Void }, 90).Parent = card
+		local stroke = UI.stroke(C.Line, 0.86)
+		stroke.Parent = card
+		local scale = UI.new("UIScale", { Parent = card })
+
+		-- Big faint role glyph behind the figure.
+		local glyph = Icons.draw(ROLE_ICONS[op.Role], card, color, {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.36),
+			Size = UDim2.fromScale(1.1, 1.1),
+			Rotation = -12,
+		})
+		for _, child in glyph:GetDescendants() do
+			if child:IsA("Frame") and child.BackgroundTransparency < 1 then
+				child.BackgroundTransparency = 0.88
+			elseif child:IsA("UIStroke") then
+				child.Transparency = 0.88
+			end
+		end
+
+		local avatar = UI.new("ImageLabel", {
+			Image = UI.avatarUrl("body"),
+			AnchorPoint = Vector2.new(0.5, 1),
+			Position = UDim2.new(0.5, 0, 1, -58),
+			Size = UDim2.fromOffset(200, 220),
+			ScaleType = Enum.ScaleType.Crop,
+			ImageColor3 = color:Lerp(C.Void, 0.55),
+			Parent = card,
+		})
+
+		-- Footer.
+		UI.new("Frame", {
+			AnchorPoint = Vector2.new(0, 1),
+			Position = UDim2.new(0, 0, 1, 0),
+			Size = UDim2.new(1, 0, 0, 74),
+			BackgroundColor3 = C.Void,
+			Parent = card,
+		}, { UI.gradient({ C.Void }, 90, NumberSequence.new(0.6, 0)) })
+		UI.text({
+			Text = op.Name,
+			Font = F.Display,
+			TextSize = 18,
+			Position = UDim2.new(0, 14, 1, -52),
+			Size = UDim2.new(1, -28, 0, 22),
+			Parent = card,
+		})
+		UI.text({
+			Text = string.upper(op.Role),
+			Font = F.Heavy,
+			TextSize = 12,
+			TextColor3 = color,
+			Position = UDim2.new(0, 14, 1, -28),
+			Size = UDim2.new(1, -28, 0, 14),
+			Parent = card,
+		})
+		local roleBadge = UI.new("Frame", {
+			Position = UDim2.fromOffset(12, 12),
+			Size = UDim2.fromOffset(30, 30),
+			BackgroundColor3 = C.Void,
+			BackgroundTransparency = 0.3,
+			Parent = card,
+		}, { UI.corner(8) })
+		Icons.draw(ROLE_ICONS[op.Role], roleBadge, color, {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromScale(0.72, 0.72),
+		})
+
+		if op.Locked then
+			lockGlyph(card)
+			UI.chip(card, "1,200", C.Amber, {
+				AnchorPoint = Vector2.new(1, 0),
+				Position = UDim2.new(1, -12, 0, 14),
+				BackgroundTransparency = 0.7,
+			})
+		elseif i == 1 then
+			UI.chip(card, "MAIN", C.Green, {
+				AnchorPoint = Vector2.new(1, 0),
+				Position = UDim2.new(1, -12, 0, 14),
+				BackgroundTransparency = 0.7,
+			})
+		end
+
+		local shade = UI.new("Frame", {
+			Size = UDim2.fromScale(1, 1),
+			BackgroundColor3 = C.Void,
+			BackgroundTransparency = 1,
+			ZIndex = 5,
+			Parent = card,
+		})
+
+		card.MouseEnter:Connect(function()
+			if i ~= selected then
+				UI.tween(scale, 0.2, { Scale = 1.02 })
+			end
+		end)
+		card.MouseLeave:Connect(function()
+			if i ~= selected then
+				UI.tween(scale, 0.2, { Scale = 1 })
+			end
+		end)
+		card.Activated:Connect(function()
+			selected = i
+			refreshCards()
+			renderDetail()
+		end)
+
+		cards[i] = { button = card, stroke = stroke, avatar = avatar, scale = scale, op = op, shade = shade }
+	end
+
+	for k, name in { "All", "Assault", "Scout", "Support", "Defender", "Recon" } do
+		local chip: TextButton = UI.new("TextButton", {
+			LayoutOrder = k,
+			Text = string.upper(name),
+			Font = F.Heavy,
+			TextSize = 13,
+			TextColor3 = C.TextDim,
+			AutomaticSize = Enum.AutomaticSize.X,
+			Size = UDim2.fromOffset(0, 34),
+			BackgroundColor3 = C.Panel,
+			BackgroundTransparency = 0.1,
+			Parent = filters,
+		}, { UI.corner(17), UI.padding(0, 18), UI.stroke(C.Line, 0.85) })
+		UI.hover(chip)
+		filterButtons[name] = chip
+		chip.Activated:Connect(function()
+			filter = name
+			refreshCards()
+		end)
+	end
+
+	refreshCards()
+	renderDetail()
+end
+]]></string>
+            </Properties>
+          </Item>
+          <Item class="ModuleScript" referent="19">
+            <Properties>
+              <string name="Name">Profile</string>
+              <string name="Source"><![CDATA[--!strict
+-- PROFILE: fake player card, career stats and recent match history.
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Theme = require(ReplicatedStorage:WaitForChild("LobbyShared"):WaitForChild("Theme"))
+local UI = require(script.Parent.Parent.UI)
+local Icons = require(script.Parent.Parent.Icons)
+local Types = require(script.Parent.Types)
+local C = Theme.Colors
+local F = Theme.Fonts
+
+local STATS = {
+	{ "MATCHES", "1,284", "+38 this week" },
+	{ "WINS", "712", "+21 this week" },
+	{ "WIN RATE", "55.4%", "+2.1%" },
+	{ "MVP", "143", "Top 8%" },
+	{ "ACCURACY", "31.7%", "+0.8%" },
+	{ "K / D", "1.86", "+0.12" },
+}
+
+local MATCHES = {
+	{ Win = true, Mode = "Squad Elimination", Operator = "VEX", Kda = "18 / 6 / 7", Xp = "+640 XP", Ago = "12m ago", Mvp = true },
+	{ Win = true, Mode = "Squad Elimination", Operator = "VEX", Kda = "14 / 9 / 4", Xp = "+520 XP", Ago = "41m ago", Mvp = false },
+	{ Win = false, Mode = "Extraction Raid", Operator = "ATLAS", Kda = "6 / 4 / 15", Xp = "+310 XP", Ago = "2h ago", Mvp = false },
+	{ Win = true, Mode = "Squad Elimination", Operator = "NOVA", Kda = "21 / 8 / 3", Xp = "+700 XP", Ago = "Yesterday", Mvp = true },
+	{ Win = false, Mode = "Squad Elimination", Operator = "BULWARK", Kda = "9 / 11 / 10", Xp = "+280 XP", Ago = "Yesterday", Mvp = false },
+}
+
+local function playerCard(parent: Instance, ctx: Types.Ctx)
+	local player = Players.LocalPlayer
+	local card = UI.panel({
+		Position = UDim2.fromOffset(0, 96),
+		Size = UDim2.fromOffset(420, 640),
+		ClipsDescendants = true,
+		Parent = parent,
+	}, 18)
+	UI.stagger(card, 1)
+
+	-- Banner.
+	local banner = UI.new("Frame", {
+		Size = UDim2.new(1, 0, 0, 150),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		ClipsDescendants = true,
+		Parent = card,
+	})
+	UI.gradient({ Color3.fromRGB(255, 140, 30), Color3.fromRGB(150, 40, 120), Color3.fromRGB(20, 40, 110) }, 20).Parent = banner
+	for k = 0, 6 do
+		UI.new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromOffset(60 + k * 60, 75),
+			Size = UDim2.fromOffset(18, 300),
+			Rotation = 30,
+			BackgroundColor3 = Color3.new(1, 1, 1),
+			BackgroundTransparency = 0.9,
+			Parent = banner,
+		})
+	end
+	UI.chip(banner, "NEON VANGUARD", C.Text, {
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, -16, 0, 16),
+		BackgroundTransparency = 0.75,
+	})
+
+	UI.headshot(card, 112, C.Amber, { Position = UDim2.fromOffset(24, 92) })
+	-- Big level badge.
+	local badge = UI.new("Frame", {
+		Position = UDim2.fromOffset(110, 168),
+		Size = UDim2.fromOffset(44, 44),
+		BackgroundTransparency = 1,
+		Parent = card,
+	})
+	local diamond = UI.diamond(badge, C.Amber, 12, {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(34, 34),
+	})
+	UI.stroke(C.Panel, 0, 3).Parent = diamond
+	UI.text({
+		Text = "42",
+		Font = F.Heavy,
+		TextSize = 16,
+		TextColor3 = C.Void,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		Size = UDim2.fromScale(1, 1),
+		Parent = badge,
+	})
+
+	UI.text({
+		Text = player.DisplayName,
+		Font = F.Display,
+		TextSize = 24,
+		Position = UDim2.fromOffset(24, 220),
+		Size = UDim2.new(1, -48, 0, 30),
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Parent = card,
+	})
+	UI.text({
+		Text = "@" .. player.Name .. "  ·  Member since Season 01",
+		Font = F.Medium,
+		TextSize = 14,
+		TextColor3 = C.TextDim,
+		Position = UDim2.fromOffset(24, 252),
+		Size = UDim2.new(1, -48, 0, 18),
+		Parent = card,
+	})
+
+	-- Rank block.
+	local rank = UI.new("Frame", {
+		Position = UDim2.fromOffset(24, 290),
+		Size = UDim2.new(1, -48, 0, 92),
+		BackgroundColor3 = C.PanelRaised,
+		BackgroundTransparency = 0.25,
+		Parent = card,
+	}, { UI.corner(12), UI.stroke(C.Cyan, 0.7) })
+	local emblem = UI.new("Frame", {
+		Position = UDim2.fromOffset(16, 16),
+		Size = UDim2.fromOffset(60, 60),
+		BackgroundTransparency = 1,
+		Parent = rank,
+	})
+	UI.diamond(emblem, C.Cyan, 10, {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(40, 40),
+	})
+	UI.diamond(emblem, Color3.new(1, 1, 1), 6, {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(16, 16),
+	})
+	UI.text({
+		Text = "COMPETITIVE RANK",
+		Font = F.Bold,
+		TextSize = 11,
+		TextColor3 = C.TextFaint,
+		Position = UDim2.fromOffset(92, 18),
+		Size = UDim2.fromOffset(200, 14),
+		Parent = rank,
+	})
+	UI.text({
+		Text = "DIAMOND II",
+		Font = F.Display,
+		TextSize = 20,
+		TextColor3 = C.Cyan,
+		Position = UDim2.fromOffset(92, 34),
+		Size = UDim2.fromOffset(220, 26),
+		Parent = rank,
+	})
+	UI.text({
+		Text = "2,418 RR  ·  Top 4.2%",
+		Font = F.Bold,
+		TextSize = 13,
+		TextColor3 = C.TextDim,
+		Position = UDim2.fromOffset(92, 62),
+		Size = UDim2.fromOffset(220, 16),
+		Parent = rank,
+	})
+
+	-- XP.
+	UI.text({
+		Text = "LEVEL 42",
+		Font = F.Heavy,
+		TextSize = 14,
+		Position = UDim2.fromOffset(24, 404),
+		Size = UDim2.fromOffset(160, 18),
+		Parent = card,
+	})
+	UI.text({
+		Text = "6,850 / 10,000 XP",
+		Font = F.Bold,
+		TextSize = 13,
+		TextColor3 = C.TextDim,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		Position = UDim2.new(0, 24, 0, 404),
+		Size = UDim2.new(1, -48, 0, 18),
+		Parent = card,
+	})
+	local _, fill = UI.progress(card, 0, C.Amber, {
+		Position = UDim2.fromOffset(24, 430),
+		Size = UDim2.new(1, -48, 0, 10),
+	})
+	UI.tween(fill, 1.1, { Size = UDim2.fromScale(0.685, 1) })
+
+	-- Badges.
+	UI.header(card, "Showcase Badges", { Position = UDim2.fromOffset(24, 464), Size = UDim2.new(1, -48, 0, 22) })
+	local badgeDefs = {
+		{ Icon = "trophy", Color = C.Legendary, Name = "Season 01 Champion" },
+		{ Icon = "assault", Color = C.Red, Name = "100 Clutch Wins" },
+		{ Icon = "support", Color = C.Green, Name = "Lifesaver" },
+		{ Icon = "scout", Color = C.Cyan, Name = "First Blood x500" },
+		{ Icon = "star", Color = C.Epic, Name = "Founder" },
+	}
+	for k, def in badgeDefs do
+		local b: TextButton = UI.new("TextButton", {
+			Text = "",
+			Position = UDim2.fromOffset(24 + (k - 1) * 74, 500),
+			Size = UDim2.fromOffset(62, 62),
+			BackgroundColor3 = Color3.new(1, 1, 1),
+			Parent = card,
+		}, { UI.corner(14), UI.stroke(def.Color, 0.5, 1.5) })
+		UI.gradient({ def.Color:Lerp(C.Void, 0.55), C.Void }, 135).Parent = b
+		Icons.draw(def.Icon, b, def.Color, {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromScale(0.66, 0.66),
+		})
+		UI.hover(b)
+		b.Activated:Connect(function()
+			ctx.toast(def.Name, "Showcase badge", def.Color)
+		end)
+	end
+
+	local edit = UI.button({
+		Position = UDim2.fromOffset(24, 580),
+		Size = UDim2.new(1, -48, 0, 40),
+		TextSize = 14,
+		Parent = card,
+	}, "ghost", "EDIT PLAYER CARD")
+	edit.Activated:Connect(function()
+		ctx.toast("Player card", "Customization is visual-only in this prototype.")
+	end)
+end
+
+local function statsGrid(parent: Instance)
+	local holder = UI.new("Frame", {
+		Position = UDim2.fromOffset(440, 96),
+		Size = UDim2.fromOffset(620, 290),
+		BackgroundTransparency = 1,
+		Parent = parent,
+	})
+	UI.stagger(holder, 2)
+	UI.header(holder, "Career  ·  All Modes")
+	local grid = UI.new("Frame", {
+		Position = UDim2.fromOffset(0, 32),
+		Size = UDim2.new(1, 0, 1, -32),
+		BackgroundTransparency = 1,
+		Parent = holder,
+	}, { UI.grid(UDim2.fromOffset(198, 118), 13) })
+	for k, stat in STATS do
+		local tile = UI.panel({ LayoutOrder = k, Parent = grid }, 14)
+		UI.text({
+			Text = stat[1],
+			Font = F.Bold,
+			TextSize = 12,
+			TextColor3 = C.TextFaint,
+			Position = UDim2.fromOffset(18, 18),
+			Size = UDim2.new(1, -36, 0, 14),
+			Parent = tile,
+		})
+		UI.text({
+			Text = stat[2],
+			Font = F.Display,
+			TextSize = 30,
+			TextColor3 = if k == 4 then C.Amber else C.Text,
+			Position = UDim2.fromOffset(16, 38),
+			Size = UDim2.new(1, -32, 0, 40),
+			Parent = tile,
+		})
+		UI.text({
+			Text = stat[3],
+			Font = F.Bold,
+			TextSize = 12,
+			TextColor3 = C.Green,
+			Position = UDim2.fromOffset(18, 84),
+			Size = UDim2.new(1, -36, 0, 14),
+			Parent = tile,
+		})
+	end
+end
+
+local function matchHistory(parent: Instance)
+	local holder = UI.new("Frame", {
+		Position = UDim2.fromOffset(440, 406),
+		Size = UDim2.fromOffset(620, 330),
+		BackgroundTransparency = 1,
+		Parent = parent,
+	})
+	UI.stagger(holder, 3)
+	UI.header(holder, "Recent Matches")
+	local list = UI.new("Frame", {
+		Position = UDim2.fromOffset(0, 32),
+		Size = UDim2.new(1, 0, 1, -32),
+		BackgroundTransparency = 1,
+		Parent = holder,
+	}, { UI.list(Enum.FillDirection.Vertical, 8) })
+
+	for k, match in MATCHES do
+		local color = if match.Win then C.Green else C.Red
+		local row = UI.panel({
+			LayoutOrder = k,
+			Size = UDim2.new(1, 0, 0, 52),
+			Parent = list,
+		}, 10)
+		row.ClipsDescendants = true
+		UI.new("Frame", {
+			Size = UDim2.new(0, 180, 1, 0),
+			BackgroundColor3 = color,
+			BackgroundTransparency = 0.75,
+			Parent = row,
+		}, { UI.gradient({ color }, 0, NumberSequence.new(0, 1)) })
+		UI.new("Frame", {
+			Size = UDim2.new(0, 4, 1, 0),
+			BackgroundColor3 = color,
+			Parent = row,
+		})
+		UI.text({
+			Text = if match.Win then "VICTORY" else "DEFEAT",
+			Font = F.Heavy,
+			TextSize = 15,
+			TextColor3 = color,
+			Position = UDim2.fromOffset(18, 8),
+			Size = UDim2.fromOffset(120, 18),
+			Parent = row,
+		})
+		UI.text({
+			Text = match.Mode,
+			Font = F.Medium,
+			TextSize = 12,
+			TextColor3 = C.TextDim,
+			Position = UDim2.fromOffset(18, 28),
+			Size = UDim2.fromOffset(160, 16),
+			Parent = row,
+		})
+		UI.text({
+			Text = match.Operator,
+			Font = F.Display,
+			TextSize = 14,
+			Position = UDim2.fromOffset(196, 0),
+			Size = UDim2.fromOffset(110, 52),
+			Parent = row,
+		})
+		UI.text({
+			Text = match.Kda,
+			Font = F.Heavy,
+			TextSize = 15,
+			Position = UDim2.fromOffset(310, 0),
+			Size = UDim2.fromOffset(110, 52),
+			Parent = row,
+		})
+		if match.Mvp then
+			UI.chip(row, "MVP", C.Amber, {
+				Position = UDim2.fromOffset(420, 14),
+				BackgroundTransparency = 0.7,
+			})
+		end
+		UI.text({
+			Text = match.Xp,
+			Font = F.Heavy,
+			TextSize = 13,
+			TextColor3 = C.Epic,
+			TextXAlignment = Enum.TextXAlignment.Right,
+			Position = UDim2.new(1, -170, 0, 8),
+			Size = UDim2.fromOffset(150, 18),
+			Parent = row,
+		})
+		UI.text({
+			Text = match.Ago,
+			Font = F.Medium,
+			TextSize = 12,
+			TextColor3 = C.TextFaint,
+			TextXAlignment = Enum.TextXAlignment.Right,
+			Position = UDim2.new(1, -170, 0, 28),
+			Size = UDim2.fromOffset(150, 16),
+			Parent = row,
+		})
+	end
+end
+
+return function(content: Frame, ctx: Types.Ctx)
+	UI.stagger(UI.text({
+		Text = "PROFILE",
+		Font = F.Display,
+		TextSize = 34,
+		Position = UDim2.fromOffset(0, 14),
+		Size = UDim2.fromOffset(400, 42),
+		Parent = content,
+	}), 0)
+	UI.stagger(UI.text({
+		Text = "SEASON 01  ·  CAREER OVERVIEW",
+		Font = F.Bold,
+		TextSize = 14,
+		TextColor3 = C.Cyan,
+		Position = UDim2.fromOffset(2, 58),
+		Size = UDim2.fromOffset(400, 18),
+		Parent = content,
+	}), 0)
+
+	playerCard(content, ctx)
+	statsGrid(content)
+	matchHistory(content)
+end
+]]></string>
+            </Properties>
+          </Item>
+          <Item class="ModuleScript" referent="20">
+            <Properties>
+              <string name="Name">Settings</string>
+              <string name="Source"><![CDATA[--!strict
+-- SETTINGS: fake options menu. Sliders drag, toggles flip and selectors
+-- cycle, but nothing is applied or saved.
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
+
+local Theme = require(ReplicatedStorage:WaitForChild("LobbyShared"):WaitForChild("Theme"))
+local UI = require(script.Parent.Parent.UI)
+local Icons = require(script.Parent.Parent.Icons)
+local Types = require(script.Parent.Types)
+local C = Theme.Colors
+local F = Theme.Fonts
+
+type Setting = {
+	Label: string,
+	Hint: string,
+	Kind: "slider" | "toggle" | "option",
+	Value: any,
+	Min: number?,
+	Max: number?,
+	Decimals: number?,
+	Suffix: string?,
+	Options: { string }?,
+}
+type Category = { Name: string, Icon: string, Settings: { Setting } }
+
+local CATEGORIES: { Category } = {
+	{ Name = "Audio", Icon = "support", Settings = {
+		{ Label = "Master Volume", Hint = "Overall game loudness", Kind = "slider", Value = 80, Min = 0, Max = 100, Suffix = "%" },
+		{ Label = "Music", Hint = "Menu and match soundtrack", Kind = "slider", Value = 55, Min = 0, Max = 100, Suffix = "%" },
+		{ Label = "Effects", Hint = "Weapons, footsteps and abilities", Kind = "slider", Value = 90, Min = 0, Max = 100, Suffix = "%" },
+		{ Label = "Voice Chat", Hint = "Hear your squad over voice", Kind = "toggle", Value = true },
+		{ Label = "Push to Talk", Hint = "Hold V to transmit", Kind = "toggle", Value = false },
+		{ Label = "Output Mix", Hint = "Tuned for your audio device", Kind = "option", Value = 2, Options = { "Speakers", "Headphones", "Night Mode" } },
+	} },
+	{ Name = "Graphics", Icon = "star", Settings = {
+		{ Label = "Quality Preset", Hint = "Overall visual fidelity", Kind = "option", Value = 3, Options = { "Low", "Medium", "High", "Ultra" } },
+		{ Label = "Field of View", Hint = "Horizontal viewing angle", Kind = "slider", Value = 90, Min = 70, Max = 110, Suffix = "°" },
+		{ Label = "Shadows", Hint = "Dynamic shadow quality", Kind = "option", Value = 2, Options = { "Off", "Soft", "Ultra" } },
+		{ Label = "Bloom", Hint = "Glow on lights and neon", Kind = "toggle", Value = true },
+		{ Label = "Motion Blur", Hint = "Blur during fast camera moves", Kind = "toggle", Value = false },
+		{ Label = "Frame Limit", Hint = "Cap rendering frame rate", Kind = "option", Value = 3, Options = { "60", "120", "144", "Unlimited" } },
+	} },
+	{ Name = "Controls", Icon = "assault", Settings = {
+		{ Label = "Mouse Sensitivity", Hint = "Look speed when hip-firing", Kind = "slider", Value = 1.8, Min = 0.1, Max = 5, Decimals = 1, Suffix = "" },
+		{ Label = "Aim Sensitivity", Hint = "Multiplier while aiming down sights", Kind = "slider", Value = 0.8, Min = 0.1, Max = 2, Decimals = 2, Suffix = "x" },
+		{ Label = "Invert Y Axis", Hint = "Flip vertical look", Kind = "toggle", Value = false },
+		{ Label = "Toggle Aim", Hint = "Click to aim instead of hold", Kind = "toggle", Value = false },
+		{ Label = "Sprint", Hint = "How sprint input behaves", Kind = "option", Value = 1, Options = { "Hold", "Toggle", "Auto" } },
+		{ Label = "Controller Vibration", Hint = "Haptic feedback on gamepads", Kind = "toggle", Value = true },
+	} },
+	{ Name = "Interface", Icon = "scout", Settings = {
+		{ Label = "HUD Scale", Hint = "Size of in-match interface", Kind = "slider", Value = 100, Min = 70, Max = 130, Suffix = "%" },
+		{ Label = "Crosshair", Hint = "Reticle style", Kind = "option", Value = 2, Options = { "Dot", "Cross", "Circle", "Chevron" } },
+		{ Label = "Crosshair Color", Hint = "Reticle tint", Kind = "option", Value = 1, Options = { "Cyan", "Green", "Yellow", "Magenta" } },
+		{ Label = "Damage Numbers", Hint = "Show hit values on enemies", Kind = "toggle", Value = true },
+		{ Label = "Show FPS", Hint = "Performance counter in corner", Kind = "toggle", Value = false },
+		{ Label = "Minimap", Hint = "Minimap orientation", Kind = "option", Value = 1, Options = { "Rotate", "Fixed" } },
+	} },
+	{ Name = "Accessibility", Icon = "defender", Settings = {
+		{ Label = "Colorblind Mode", Hint = "Adjusts team and UI colors", Kind = "option", Value = 1, Options = { "Off", "Protanopia", "Deuteranopia", "Tritanopia" } },
+		{ Label = "Subtitles", Hint = "Captions for dialogue and callouts", Kind = "toggle", Value = true },
+		{ Label = "Text Size", Hint = "Menu and subtitle text scale", Kind = "slider", Value = 100, Min = 80, Max = 150, Suffix = "%" },
+		{ Label = "Reduce Motion", Hint = "Calmer menu and camera animation", Kind = "toggle", Value = false },
+		{ Label = "Screen Shake", Hint = "Intensity of camera shake", Kind = "slider", Value = 60, Min = 0, Max = 100, Suffix = "%" },
+		{ Label = "Visual Sound Cues", Hint = "Show footsteps and gunfire on HUD", Kind = "toggle", Value = false },
+	} },
+}
+
+local CONTROL_X = -460 -- controls are right-aligned inside each row
+
+local function formatValue(setting: Setting, value: number): string
+	local decimals = setting.Decimals or 0
+	return string.format("%." .. decimals .. "f", value) .. (setting.Suffix or "")
+end
+
+local function slider(row: Frame, setting: Setting)
+	local min, max = setting.Min or 0, setting.Max or 100
+	local track: TextButton = UI.new("TextButton", {
+		Text = "",
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(1, CONTROL_X, 0.5, 0),
+		Size = UDim2.fromOffset(320, 26),
+		BackgroundTransparency = 1,
+		Parent = row,
+	})
+	local bar = UI.new("Frame", {
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.fromScale(0, 0.5),
+		Size = UDim2.new(1, 0, 0, 6),
+		BackgroundColor3 = C.Void,
+		BackgroundTransparency = 0.1,
+		Parent = track,
+	}, { UI.corner(3) })
+	local fill = UI.new("Frame", {
+		Size = UDim2.fromScale(0, 1),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		Parent = bar,
+	}, { UI.corner(3), UI.gradient({ C.CyanDeep, C.Cyan }, 0) })
+	local knob = UI.new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0, 0.5),
+		Size = UDim2.fromOffset(18, 18),
+		BackgroundColor3 = C.Text,
+		Parent = track,
+	}, { UI.corner(9), UI.stroke(C.Cyan, 0, 3) })
+	local knobScale = UI.new("UIScale", { Parent = knob })
+	local valueLabel = UI.text({
+		Text = "",
+		Font = F.Heavy,
+		TextSize = 16,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -24, 0.5, 0),
+		Size = UDim2.fromOffset(90, 20),
+		Parent = row,
+	})
+
+	local function set(alpha: number)
+		alpha = math.clamp(alpha, 0, 1)
+		local value = min + (max - min) * alpha
+		setting.Value = value
+		fill.Size = UDim2.fromScale(alpha, 1)
+		knob.Position = UDim2.fromScale(alpha, 0.5)
+		valueLabel.Text = formatValue(setting, value)
+	end
+	set(((setting.Value :: number) - min) / (max - min))
+
+	local dragging = false
+	local function fromInput(x: number)
+		set((x - track.AbsolutePosition.X) / math.max(track.AbsoluteSize.X, 1))
+	end
+	track.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			UI.tween(knobScale, 0.15, { Scale = 1.3 })
+			fromInput(input.Position.X)
+		end
+	end)
+	local moved = UserInputService.InputChanged:Connect(function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+			fromInput(input.Position.X)
+		end
+	end)
+	local released = UserInputService.InputEnded:Connect(function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) then
+			dragging = false
+			UI.tween(knobScale, 0.2, { Scale = 1 })
+		end
+	end)
+	-- Rows are rebuilt on category switch; drop the global listeners with them.
+	track.Destroying:Connect(function()
+		moved:Disconnect()
+		released:Disconnect()
+	end)
+end
+
+local function toggle(row: Frame, setting: Setting)
+	local pill: TextButton = UI.new("TextButton", {
+		Text = "",
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -24, 0.5, 0),
+		Size = UDim2.fromOffset(60, 32),
+		BackgroundColor3 = C.PanelHover,
+		Parent = row,
+	}, { UI.corner(16) })
+	local stroke = UI.stroke(C.Line, 0.8)
+	stroke.Parent = pill
+	local knob = UI.new("Frame", {
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 4, 0.5, 0),
+		Size = UDim2.fromOffset(24, 24),
+		BackgroundColor3 = C.TextDim,
+		Parent = pill,
+	}, { UI.corner(12) })
+	local stateLabel = UI.text({
+		Text = "",
+		Font = F.Heavy,
+		TextSize = 13,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -96, 0.5, 0),
+		Size = UDim2.fromOffset(60, 20),
+		Parent = row,
+	})
+
+	local function paint(animate: boolean)
+		local on = setting.Value == true
+		local t = if animate then 0.22 else 0
+		UI.tween(knob, t, {
+			Position = if on then UDim2.new(1, -28, 0.5, 0) else UDim2.new(0, 4, 0.5, 0),
+			BackgroundColor3 = if on then C.Void else C.TextDim,
+		}, Enum.EasingStyle.Back)
+		UI.tween(pill, t, { BackgroundColor3 = if on then C.Cyan else C.PanelHover })
+		UI.tween(stroke, t, { Transparency = if on then 1 else 0.8 })
+		stateLabel.Text = if on then "ON" else "OFF"
+		stateLabel.TextColor3 = if on then C.Cyan else C.TextFaint
+	end
+	paint(false)
+	pill.Activated:Connect(function()
+		setting.Value = not setting.Value
+		paint(true)
+	end)
+end
+
+local function option(row: Frame, setting: Setting)
+	local options = setting.Options or { "-" }
+	local holder = UI.new("Frame", {
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -24, 0.5, 0),
+		Size = UDim2.fromOffset(300, 44),
+		BackgroundColor3 = C.Void,
+		BackgroundTransparency = 0.4,
+		Parent = row,
+	}, { UI.corner(10), UI.stroke(C.Line, 0.88) })
+	local label = UI.text({
+		Text = "",
+		Font = F.Heavy,
+		TextSize = 16,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		Position = UDim2.fromOffset(44, 4),
+		Size = UDim2.new(1, -88, 0, 26),
+		Parent = holder,
+	})
+	local pips = UI.new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.new(0.5, 0, 1, -7),
+		Size = UDim2.fromOffset(#options * 22, 3),
+		BackgroundTransparency = 1,
+		Parent = holder,
+	}, { UI.list(Enum.FillDirection.Horizontal, 4, Enum.HorizontalAlignment.Center) })
+	local pipFrames: { Frame } = {}
+	for k = 1, #options do
+		pipFrames[k] = UI.new("Frame", {
+			LayoutOrder = k,
+			Size = UDim2.fromOffset(18, 3),
+			BackgroundColor3 = C.PanelHover,
+			Parent = pips,
+		}, { UI.corner(2) })
+	end
+
+	local function paint(dir: number)
+		local index = setting.Value :: number
+		label.Text = options[index]
+		if dir ~= 0 then
+			label.Position = UDim2.fromOffset(44 + dir * 14, 4)
+			UI.tween(label, 0.25, { Position = UDim2.fromOffset(44, 4) })
+		end
+		for k, pip in pipFrames do
+			UI.tween(pip, 0.2, { BackgroundColor3 = if k == index then C.Cyan else C.PanelHover })
+		end
+	end
+	paint(0)
+
+	for _, dir in { -1, 1 } do
+		local arrow: TextButton = UI.new("TextButton", {
+			Text = if dir < 0 then "<" else ">",
+			Font = F.Heavy,
+			TextSize = 18,
+			TextColor3 = C.Cyan,
+			AnchorPoint = Vector2.new(if dir < 0 then 0 else 1, 0.5),
+			Position = UDim2.new(if dir < 0 then 0 else 1, if dir < 0 then 4 else -4, 0.5, 0),
+			Size = UDim2.fromOffset(36, 36),
+			BackgroundColor3 = C.PanelRaised,
+			BackgroundTransparency = 0.4,
+			Parent = holder,
+		}, { UI.corner(8) })
+		UI.hover(arrow)
+		arrow.Activated:Connect(function()
+			setting.Value = ((setting.Value :: number) - 1 + dir) % #options + 1
+			paint(dir)
+		end)
+	end
+end
+
+return function(content: Frame, ctx: Types.Ctx)
+	local categoryIndex = 1
+
+	UI.stagger(UI.text({
+		Text = "SETTINGS",
+		Font = F.Display,
+		TextSize = 34,
+		Position = UDim2.fromOffset(0, 14),
+		Size = UDim2.fromOffset(400, 42),
+		Parent = content,
+	}), 0)
+	UI.stagger(UI.text({
+		Text = "PREVIEW BUILD  ·  CHANGES ARE NOT SAVED",
+		Font = F.Bold,
+		TextSize = 14,
+		TextColor3 = C.Cyan,
+		Position = UDim2.fromOffset(2, 58),
+		Size = UDim2.fromOffset(600, 18),
+		Parent = content,
+	}), 0)
+
+	local nav = UI.panel({
+		Position = UDim2.fromOffset(0, 96),
+		Size = UDim2.fromOffset(300, 640),
+		Parent = content,
+	}, 16)
+	UI.stagger(nav, 1)
+	local navList = UI.new("Frame", {
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		Parent = nav,
+	}, { UI.list(Enum.FillDirection.Vertical, 6), UI.padding(14) })
+
+	local panel = UI.panel({
+		Position = UDim2.fromOffset(320, 96),
+		Size = UDim2.fromOffset(1280, 640),
+		ClipsDescendants = true,
+		Parent = content,
+	}, 16)
+	UI.stagger(panel, 2)
+	local panelTitle = UI.text({
+		Text = "",
+		Font = F.Display,
+		TextSize = 22,
+		Position = UDim2.fromOffset(32, 24),
+		Size = UDim2.fromOffset(600, 30),
+		Parent = panel,
+	})
+	local rows = UI.new("Frame", {
+		Position = UDim2.fromOffset(20, 76),
+		Size = UDim2.new(1, -40, 1, -160),
+		BackgroundTransparency = 1,
+		Parent = panel,
+	})
+
+	-- Footer actions.
+	local reset = UI.button({
+		AnchorPoint = Vector2.new(1, 1),
+		Position = UDim2.new(1, -252, 1, -24),
+		Size = UDim2.fromOffset(200, 48),
+		TextSize = 14,
+		Parent = panel,
+	}, "ghost", "RESET TO DEFAULT")
+	reset.Activated:Connect(function()
+		ctx.toast("Defaults restored", "Preview only — nothing was changed.")
+	end)
+	local apply = UI.button({
+		AnchorPoint = Vector2.new(1, 1),
+		Position = UDim2.new(1, -32, 1, -24),
+		Size = UDim2.fromOffset(200, 48),
+		TextSize = 15,
+		Parent = panel,
+	}, "primary", "APPLY")
+	apply.Activated:Connect(function()
+		ctx.toast("Settings applied", "Not persisted in this prototype.", C.Green)
+	end)
+
+	type NavRef = { button: TextButton, bar: Frame, label: TextLabel }
+	local navButtons: { NavRef } = {}
+
+	local function renderRows()
+		rows:ClearAllChildren()
+		local category = CATEGORIES[categoryIndex]
+		panelTitle.Text = string.upper(category.Name)
+
+		local list = UI.new("Frame", {
+			Position = UDim2.fromOffset(40, 0),
+			Size = UDim2.fromScale(1, 1),
+			BackgroundTransparency = 1,
+			Parent = rows,
+		}, { UI.list(Enum.FillDirection.Vertical, 6) })
+		UI.tween(list, 0.4, { Position = UDim2.fromOffset(0, 0) })
+
+		for k, setting in category.Settings do
+			local row: Frame = UI.new("Frame", {
+				LayoutOrder = k,
+				Size = UDim2.new(1, 0, 0, 68),
+				BackgroundColor3 = C.PanelRaised,
+				BackgroundTransparency = if k % 2 == 1 then 0.55 else 1,
+				Parent = list,
+			}, { UI.corner(10) })
+			UI.text({
+				Text = setting.Label,
+				Font = F.Heavy,
+				TextSize = 17,
+				Position = UDim2.fromOffset(20, 14),
+				Size = UDim2.fromOffset(500, 20),
+				Parent = row,
+			})
+			UI.text({
+				Text = setting.Hint,
+				Font = F.Medium,
+				TextSize = 13,
+				TextColor3 = C.TextFaint,
+				Position = UDim2.fromOffset(20, 36),
+				Size = UDim2.fromOffset(500, 16),
+				Parent = row,
+			})
+			if setting.Kind == "slider" then
+				slider(row, setting)
+			elseif setting.Kind == "toggle" then
+				toggle(row, setting)
+			else
+				option(row, setting)
+			end
+		end
+
+		for i, ref in navButtons do
+			local active = i == categoryIndex
+			UI.tween(ref.button, 0.2, { BackgroundTransparency = if active then 0.2 else 1 })
+			UI.tween(ref.bar, 0.2, { BackgroundTransparency = if active then 0 else 1 })
+			UI.tween(ref.label, 0.2, { TextColor3 = if active then C.Text else C.TextDim })
+		end
+	end
+
+	for i, category in CATEGORIES do
+		local button: TextButton = UI.new("TextButton", {
+			Text = "",
+			LayoutOrder = i,
+			Size = UDim2.new(1, 0, 0, 56),
+			BackgroundColor3 = C.PanelHover,
+			BackgroundTransparency = 1,
+			Parent = navList,
+		}, { UI.corner(10) })
+		local bar = UI.new("Frame", {
+			Position = UDim2.fromOffset(0, 14),
+			Size = UDim2.fromOffset(3, 28),
+			BackgroundColor3 = C.Cyan,
+			BackgroundTransparency = 1,
+			Parent = button,
+		}, { UI.corner(2) })
+		Icons.draw(category.Icon, button, C.Cyan, {
+			Position = UDim2.fromOffset(18, 16),
+			Size = UDim2.fromOffset(24, 24),
+		})
+		local label = UI.text({
+			Text = string.upper(category.Name),
+			Font = F.Heavy,
+			TextSize = 15,
+			TextColor3 = C.TextDim,
+			Position = UDim2.fromOffset(56, 0),
+			Size = UDim2.new(1, -60, 1, 0),
+			Parent = button,
+		})
+		button.MouseEnter:Connect(function()
+			if i ~= categoryIndex then
+				UI.tween(button, 0.15, { BackgroundTransparency = 0.6 })
+			end
+		end)
+		button.MouseLeave:Connect(function()
+			if i ~= categoryIndex then
+				UI.tween(button, 0.15, { BackgroundTransparency = 1 })
+			end
+		end)
+		button.Activated:Connect(function()
+			categoryIndex = i
+			renderRows()
+		end)
+		navButtons[i] = { button = button, bar = bar, label = label }
+	end
+
+	renderRows()
+end
+]]></string>
+            </Properties>
+          </Item>
+          <Item class="ModuleScript" referent="21">
+            <Properties>
+              <string name="Name">Shop</string>
+              <string name="Source"><![CDATA[--!strict
+-- SHOP: fake storefront. Featured bundle banner, a grid of item offers and a
+-- currency pack row. Prices are decorative.
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+
+local Theme = require(ReplicatedStorage:WaitForChild("LobbyShared"):WaitForChild("Theme"))
+local UI = require(script.Parent.Parent.UI)
+local Icons = require(script.Parent.Parent.Icons)
+local Types = require(script.Parent.Types)
+local C = Theme.Colors
+local F = Theme.Fonts
+
+type Offer = { Name: string, Kind: string, Rarity: string, Icon: string, Price: number, Currency: "coin" | "gem", Tag: string? }
+
+local OFFERS: { Offer } = {
+	{ Name = "Nightfall DMR", Kind = "Primary Weapon", Rarity = "Legendary", Icon = "rifle", Price = 1600, Currency = "gem", Tag = "NEW" },
+	{ Name = "Arctic Ops", Kind = "Operator Skin", Rarity = "Rare", Icon = "skin", Price = 4800, Currency = "coin" },
+	{ Name = "Ion Cleaver", Kind = "Melee", Rarity = "Epic", Icon = "knife", Price = 950, Currency = "gem", Tag = "HOT" },
+	{ Name = "Holo Goggles", Kind = "Accessory", Rarity = "Epic", Icon = "accessory", Price = 700, Currency = "gem" },
+	{ Name = "Ripper SMG", Kind = "Primary Weapon", Rarity = "Rare", Icon = "smg", Price = 3200, Currency = "coin" },
+	{ Name = "Recon Drone", Kind = "Gadget", Rarity = "Common", Icon = "gadget", Price = 1500, Currency = "coin" },
+}
+
+local PACKS: { { Amount: number, Bonus: string?, Price: string } } = {
+	{ Amount = 500, Bonus = nil, Price = "R$ 80" },
+	{ Amount = 1200, Bonus = "+10%", Price = "R$ 180" },
+	{ Amount = 2800, Bonus = "+20%", Price = "R$ 400" },
+	{ Amount = 6500, Bonus = "BEST VALUE", Price = "R$ 850" },
+}
+
+local function priceTag(parent: Instance, amount: number, currency: "coin" | "gem", props: UI.Props): Frame
+	local p = table.clone(props)
+	p.BackgroundTransparency = 1
+	p.Parent = parent
+	local holder = UI.new("Frame", p)
+	if currency == "coin" then
+		UI.coin(holder, C.Amber, 18, { Position = UDim2.new(0, 0, 0.5, -9) })
+	else
+		UI.diamond(holder, C.Cyan, 13, { Position = UDim2.new(0, 3, 0.5, -6) })
+	end
+	UI.text({
+		Text = UI.formatNumber(amount),
+		Font = F.Heavy,
+		TextSize = 17,
+		Position = UDim2.fromOffset(26, 0),
+		Size = UDim2.new(1, -26, 1, 0),
+		Parent = holder,
+	})
+	return holder
+end
+
+local function featured(parent: Instance, ctx: Types.Ctx)
+	local banner: TextButton = UI.new("TextButton", {
+		Text = "",
+		Position = UDim2.fromOffset(0, 96),
+		Size = UDim2.fromOffset(760, 564),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		ClipsDescendants = true,
+		Parent = parent,
+	}, { UI.corner(18), UI.stroke(C.Legendary, 0.4, 1.5) })
+	UI.stagger(banner, 1)
+	UI.gradient({ Color3.fromRGB(92, 30, 150), Color3.fromRGB(30, 26, 90), Color3.fromRGB(4, 70, 120) }, 35).Parent = banner
+
+	-- Light rays and a big diamond motif.
+	for k = 0, 4 do
+		UI.new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.new(0.68 + k * 0.05, 0, 0.5, 0),
+			Size = UDim2.fromOffset(14 + k * 6, 900),
+			Rotation = 22,
+			BackgroundColor3 = Color3.new(1, 1, 1),
+			BackgroundTransparency = 0.9 + k * 0.015,
+			Parent = banner,
+		})
+	end
+	UI.new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.74, 0.46),
+		Size = UDim2.fromOffset(330, 330),
+		Rotation = 45,
+		BackgroundTransparency = 1,
+		Parent = banner,
+	}, { UI.corner(30), UI.stroke(C.Legendary, 0.55, 3) })
+
+	local avatar = UI.new("ImageLabel", {
+		Image = UI.avatarUrl("body"),
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.new(0.74, 0, 1, -40),
+		Size = UDim2.fromOffset(420, 460),
+		ScaleType = Enum.ScaleType.Crop,
+		Parent = banner,
+	})
+	-- Gentle float.
+	local connection
+	connection = RunService.RenderStepped:Connect(function()
+		if not avatar.Parent then
+			connection:Disconnect()
+			return
+		end
+		avatar.Position = UDim2.new(0.74, 0, 1, -40 + math.sin(os.clock() * 1.2) * 5)
+	end)
+
+	UI.new("Frame", {
+		Size = UDim2.new(0.62, 0, 1, 0),
+		BackgroundColor3 = C.Void,
+		Parent = banner,
+	}, { UI.gradient({ C.Void }, 0, NumberSequence.new(0.35, 1)) })
+
+	UI.chip(banner, "FEATURED  ·  LEGENDARY BUNDLE", C.Legendary, { Position = UDim2.fromOffset(32, 32), BackgroundTransparency = 0.7 })
+	UI.text({
+		Text = "NEON",
+		Font = F.Display,
+		TextSize = 64,
+		Position = UDim2.fromOffset(30, 72),
+		Size = UDim2.fromOffset(420, 72),
+		Parent = banner,
+	})
+	UI.text({
+		Text = "VANGUARD",
+		Font = F.Display,
+		TextSize = 64,
+		TextColor3 = C.Legendary,
+		Position = UDim2.fromOffset(30, 138),
+		Size = UDim2.fromOffset(460, 72),
+		Parent = banner,
+	})
+	UI.text({
+		Text = "The Season 01 signature collection. Reactive neon trims, a charged Arc Blade and a floating Halo Crown.",
+		Font = F.Medium,
+		TextSize = 16,
+		TextColor3 = Color3.fromRGB(215, 210, 240),
+		TextWrapped = true,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		Position = UDim2.fromOffset(32, 222),
+		Size = UDim2.fromOffset(380, 66),
+		Parent = banner,
+	})
+
+	local contents = { { "skin", "Neon Vanguard Skin" }, { "knife", "Arc Blade" }, { "accessory", "Halo Crown" }, { "star", "1,000 Shards" } }
+	for k, entry in contents do
+		local y = 300 + (k - 1) * 38
+		local box = UI.new("Frame", {
+			Position = UDim2.fromOffset(32, y),
+			Size = UDim2.fromOffset(30, 30),
+			BackgroundColor3 = C.Void,
+			BackgroundTransparency = 0.4,
+			Parent = banner,
+		}, { UI.corner(8) })
+		Icons.draw(entry[1], box, C.Legendary, {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromScale(0.8, 0.8),
+		})
+		UI.text({
+			Text = entry[2],
+			Font = F.Bold,
+			TextSize = 15,
+			Position = UDim2.fromOffset(74, y),
+			Size = UDim2.fromOffset(300, 30),
+			Parent = banner,
+		})
+	end
+
+	-- Price + buy.
+	UI.chip(banner, "-25%", C.Green, { Position = UDim2.fromOffset(32, 470), BackgroundTransparency = 0.7 })
+	UI.text({
+		Text = "<s>2,400</s>",
+		RichText = true,
+		Font = F.Bold,
+		TextSize = 16,
+		TextColor3 = C.TextFaint,
+		Position = UDim2.fromOffset(98, 470),
+		Size = UDim2.fromOffset(80, 24),
+		Parent = banner,
+	})
+	priceTag(banner, 1800, "gem", { Position = UDim2.fromOffset(32, 500), Size = UDim2.fromOffset(140, 30) })
+	local buy = UI.button({
+		Position = UDim2.fromOffset(190, 478),
+		Size = UDim2.fromOffset(220, 56),
+		TextSize = 18,
+		Parent = banner,
+	}, "primary", "PURCHASE")
+	buy.Activated:Connect(function()
+		ctx.toast("Store preview", "Purchases are disabled in this showcase build.", C.Legendary)
+	end)
+	UI.text({
+		Text = "LEAVES IN 2D 14H",
+		Font = F.Heavy,
+		TextSize = 12,
+		TextColor3 = C.Legendary,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		AnchorPoint = Vector2.new(1, 1),
+		Position = UDim2.new(1, -24, 1, -20),
+		Size = UDim2.fromOffset(200, 14),
+		Parent = banner,
+	})
+end
+
+local function offerCard(parent: Instance, offer: Offer, order: number, ctx: Types.Ctx)
+	local color = Theme.Rarity[offer.Rarity]
+	local card: TextButton = UI.new("TextButton", {
+		Text = "",
+		LayoutOrder = order,
+		BackgroundColor3 = C.Panel,
+		BackgroundTransparency = 0.05,
+		ClipsDescendants = true,
+		Parent = parent,
+	}, { UI.corner(14) })
+	local stroke = UI.stroke(C.Line, 0.88)
+	stroke.Parent = card
+	UI.hover(card, function()
+		UI.tween(stroke, 0.2, { Color = color, Transparency = 0.2 })
+	end, function()
+		UI.tween(stroke, 0.2, { Color = C.Line, Transparency = 0.88 })
+	end)
+
+	local art = UI.new("Frame", {
+		Size = UDim2.new(1, 0, 0, 170),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		Parent = card,
+	})
+	UI.gradient({ color:Lerp(C.Void, 0.35), color:Lerp(C.Void, 0.8) }, 115).Parent = art
+	UI.new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(140, 140),
+		Rotation = 45,
+		BackgroundTransparency = 1,
+		Parent = art,
+	}, { UI.corner(18), UI.stroke(color, 0.6, 2) })
+	Icons.draw(offer.Icon, art, Color3.new(1, 1, 1), {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(150, 150),
+	})
+	UI.new("Frame", {
+		Position = UDim2.new(0, 0, 0, 170),
+		Size = UDim2.new(1, 0, 0, 3),
+		BackgroundColor3 = color,
+		Parent = card,
+	})
+	if offer.Tag then
+		UI.chip(art, offer.Tag, if offer.Tag == "HOT" then C.Red else C.Green, {
+			Position = UDim2.fromOffset(12, 12),
+			BackgroundTransparency = 0.6,
+		})
+	end
+	UI.text({
+		Text = offer.Name,
+		Font = F.Heavy,
+		TextSize = 17,
+		Position = UDim2.fromOffset(16, 184),
+		Size = UDim2.new(1, -32, 0, 20),
+		Parent = card,
+	})
+	UI.text({
+		Text = string.upper(offer.Rarity) .. "  ·  " .. string.upper(offer.Kind),
+		Font = F.Bold,
+		TextSize = 11,
+		TextColor3 = color,
+		Position = UDim2.fromOffset(16, 206),
+		Size = UDim2.new(1, -32, 0, 14),
+		Parent = card,
+	})
+	priceTag(card, offer.Price, offer.Currency, { Position = UDim2.fromOffset(16, 230), Size = UDim2.fromOffset(120, 26) })
+
+	card.Activated:Connect(function()
+		ctx.toast(offer.Name, "Store is visual-only in this prototype.", color)
+	end)
+end
+
+local function packs(parent: Instance, ctx: Types.Ctx)
+	local row = UI.new("Frame", {
+		Position = UDim2.fromOffset(0, 680),
+		Size = UDim2.fromOffset(1600, 170),
+		BackgroundTransparency = 1,
+		Parent = parent,
+	})
+	UI.stagger(row, 3)
+	UI.header(row, "Shard Packs")
+	local list = UI.new("Frame", {
+		Position = UDim2.fromOffset(0, 32),
+		Size = UDim2.new(1, 0, 0, 130),
+		BackgroundTransparency = 1,
+		Parent = row,
+	}, { UI.list(Enum.FillDirection.Horizontal, 20) })
+
+	for k, pack in PACKS do
+		local card = UI.button({
+			LayoutOrder = k,
+			Size = UDim2.fromOffset(385, 120),
+			Parent = list,
+		}, "dark", "")
+		-- A cluster of gems, growing with the pack size.
+		for g = 1, k + 1 do
+			UI.diamond(card, C.Cyan, 26 - g, {
+				Size = UDim2.fromOffset(30 - g * 2, 30 - g * 2),
+				Position = UDim2.fromOffset(22 + (g - 1) * 16, 30 + (g % 2) * 26),
+			})
+		end
+		UI.text({
+			Text = UI.formatNumber(pack.Amount),
+			Font = F.Display,
+			TextSize = 24,
+			Position = UDim2.fromOffset(150, 26),
+			Size = UDim2.fromOffset(200, 30),
+			Parent = card,
+		})
+		UI.text({
+			Text = "HELIX SHARDS",
+			Font = F.Bold,
+			TextSize = 12,
+			TextColor3 = C.Cyan,
+			Position = UDim2.fromOffset(152, 60),
+			Size = UDim2.fromOffset(200, 14),
+			Parent = card,
+		})
+		UI.text({
+			Text = pack.Price,
+			Font = F.Heavy,
+			TextSize = 16,
+			TextColor3 = C.Text,
+			Position = UDim2.fromOffset(152, 82),
+			Size = UDim2.fromOffset(120, 18),
+			Parent = card,
+		})
+		if pack.Bonus then
+			UI.chip(card, pack.Bonus, if k == #PACKS then C.Amber else C.Green, {
+				AnchorPoint = Vector2.new(1, 0),
+				Position = UDim2.new(1, -14, 0, 14),
+				BackgroundTransparency = 0.7,
+			})
+		end
+		card.Activated:Connect(function()
+			ctx.toast(UI.formatNumber(pack.Amount) .. " Shards", "Purchases are disabled in this showcase build.", C.Cyan)
+		end)
+	end
+end
+
+return function(content: Frame, ctx: Types.Ctx)
+	UI.stagger(UI.text({
+		Text = "SHOP",
+		Font = F.Display,
+		TextSize = 34,
+		Position = UDim2.fromOffset(0, 14),
+		Size = UDim2.fromOffset(300, 42),
+		Parent = content,
+	}), 0)
+	UI.stagger(UI.text({
+		Text = "NEW OFFERS EVERY DAY",
+		Font = F.Bold,
+		TextSize = 14,
+		TextColor3 = C.Cyan,
+		Position = UDim2.fromOffset(2, 58),
+		Size = UDim2.fromOffset(300, 18),
+		Parent = content,
+	}), 0)
+
+	-- Section tabs.
+	local sections = UI.new("Frame", {
+		Position = UDim2.fromOffset(260, 22),
+		Size = UDim2.fromOffset(700, 40),
+		BackgroundTransparency = 1,
+		Parent = content,
+	}, { UI.list(Enum.FillDirection.Horizontal, 8) })
+	UI.stagger(sections, 0)
+	local sectionButtons: { TextButton } = {}
+	for k, name in { "FEATURED", "DAILY", "BUNDLES", "CURRENCY" } do
+		local b: TextButton = UI.new("TextButton", {
+			LayoutOrder = k,
+			Text = name,
+			Font = F.Heavy,
+			TextSize = 13,
+			AutomaticSize = Enum.AutomaticSize.X,
+			Size = UDim2.fromOffset(0, 36),
+			BackgroundColor3 = if k == 1 then C.Cyan else C.Panel,
+			TextColor3 = if k == 1 then C.Void else C.TextDim,
+			Parent = sections,
+		}, { UI.corner(18), UI.padding(0, 18), UI.stroke(C.Line, 0.85) })
+		UI.hover(b)
+		sectionButtons[k] = b
+		b.Activated:Connect(function()
+			for j, other in sectionButtons do
+				UI.tween(other, 0.2, {
+					BackgroundColor3 = if j == k then C.Cyan else C.Panel,
+					TextColor3 = if j == k then C.Void else C.TextDim,
+				})
+			end
+		end)
+	end
+
+	-- Reset timer (ticks down for flavour).
+	local timer = UI.text({
+		Text = "",
+		Font = F.Heavy,
+		TextSize = 14,
+		TextColor3 = C.TextDim,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, 0, 0, 34),
+		Size = UDim2.fromOffset(300, 18),
+		Parent = content,
+	})
+	local resetAt = os.clock() + 7 * 3600 + 42 * 60 + 13
+	task.spawn(function()
+		while timer.Parent do
+			local left = math.max(0, math.floor(resetAt - os.clock()))
+			timer.Text = string.format("DAILY RESET  %02d:%02d:%02d", left // 3600, (left % 3600) // 60, left % 60)
+			task.wait(1)
+		end
+	end)
+
+	featured(content, ctx)
+
+	local grid = UI.new("Frame", {
+		Position = UDim2.fromOffset(780, 96),
+		Size = UDim2.fromOffset(820, 564),
+		BackgroundTransparency = 1,
+		Parent = content,
+	}, { UI.grid(UDim2.fromOffset(260, 272), 20) })
+	UI.stagger(grid, 2)
+	for k, offer in OFFERS do
+		offerCard(grid, offer, k, ctx)
+	end
+
+	packs(content, ctx)
+end
+]]></string>
+            </Properties>
+          </Item>
+          <Item class="ModuleScript" referent="22">
+            <Properties>
+              <string name="Name">Types</string>
+              <string name="Source"><![CDATA[--!strict
+-- Shared context handed to every page builder.
+
+export type Ctx = {
+	-- Show a toast notification.
+	toast: (title: string, body: string, accent: Color3?) -> (),
+	-- Switch to another top-level page by name.
+	goTo: (name: string) -> (),
+	-- Fake "invite friend" action for a party slot.
+	invite: (slot: number) -> (),
+}
+
+return {}
+]]></string>
+            </Properties>
+          </Item>
+        </Item>
+        <Item class="ModuleScript" referent="23">
+          <Properties>
+            <string name="Name">SlotBillboards</string>
+            <string name="Source"><![CDATA[--!strict
+-- World-anchored party UI: the hero nameplate over slot 1 and the big "+"
+-- invite buttons floating over the three empty pads. Billboards live in
+-- PlayerGui (adorned to the pads) so they receive mouse input.
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Theme = require(ReplicatedStorage:WaitForChild("LobbyShared"):WaitForChild("Theme"))
+local UI = require(script.Parent.UI)
+local C = Theme.Colors
+local F = Theme.Fonts
+
+local SlotBillboards = {}
+
+local billboards: { BillboardGui } = {}
+local bobbers: { { gui: BillboardGui, base: Vector3, phase: number } } = {}
+local spinners: { GuiObject } = {}
+
+local function nameplate(anchor: BasePart, playerGui: PlayerGui)
+	local player = Players.LocalPlayer
+	local gui: BillboardGui = UI.new("BillboardGui", {
+		Name = "HeroNameplate",
+		Adornee = anchor,
+		Size = UDim2.fromScale(7, 1.9),
+		StudsOffsetWorldSpace = Vector3.new(0, 6.7, 0),
+		LightInfluence = 0,
+		AlwaysOnTop = true,
+		ResetOnSpawn = false,
+		MaxDistance = 500,
+		Parent = playerGui,
+	})
+
+	local row = UI.new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Parent = gui })
+
+	-- Level hex.
+	local badge = UI.new("Frame", {
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.fromScale(0.02, 0.42),
+		Size = UDim2.fromScale(0.15, 0.55),
+		BackgroundTransparency = 1,
+		Parent = row,
+	})
+	UI.new("UIAspectRatioConstraint", { AspectRatio = 1, Parent = badge })
+	UI.diamond(badge, C.Amber, 10, {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromScale(0.78, 0.78),
+	})
+	UI.text({
+		Text = "42",
+		Font = F.Heavy,
+		TextScaled = true,
+		TextColor3 = C.Void,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		Size = UDim2.fromScale(1, 0.5),
+		Position = UDim2.fromScale(0, 0.25),
+		Parent = badge,
+	})
+
+	UI.text({
+		Text = string.upper(player.DisplayName),
+		Font = F.Heavy,
+		TextScaled = true,
+		TextColor3 = C.Text,
+		Position = UDim2.fromScale(0.2, 0.08),
+		Size = UDim2.fromScale(0.8, 0.46),
+		Parent = row,
+	})
+	local status = UI.new("Frame", {
+		Position = UDim2.fromScale(0.2, 0.58),
+		Size = UDim2.fromScale(0.8, 0.3),
+		BackgroundTransparency = 1,
+		Parent = row,
+	})
+	UI.new("Frame", {
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.fromScale(0, 0.5),
+		Size = UDim2.fromScale(0.035, 0.45),
+		BackgroundColor3 = C.Green,
+		Parent = status,
+	}, { UI.corner(99) })
+	UI.text({
+		Text = "PARTY LEADER  ·  READY",
+		Font = F.Bold,
+		TextScaled = true,
+		TextColor3 = C.Amber,
+		Position = UDim2.fromScale(0.06, 0),
+		Size = UDim2.fromScale(0.94, 1),
+		Parent = status,
+	})
+
+	table.insert(billboards, gui)
+end
+
+local function inviteButton(index: number, anchor: BasePart, playerGui: PlayerGui, onInvite: (number) -> ())
+	local gui: BillboardGui = UI.new("BillboardGui", {
+		Name = "Invite" .. index,
+		Adornee = anchor,
+		Size = UDim2.fromScale(3.6, 4.8),
+		StudsOffsetWorldSpace = Vector3.new(0, 3.7, 0),
+		LightInfluence = 0,
+		AlwaysOnTop = true,
+		ResetOnSpawn = false,
+		MaxDistance = 500,
+		Active = true,
+		Parent = playerGui,
+	})
+
+	local button: TextButton = UI.new("TextButton", {
+		Text = "",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		Parent = gui,
+	})
+
+	local orb = UI.new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.37),
+		Size = UDim2.fromScale(0.82, 0.62),
+		BackgroundTransparency = 1,
+		Parent = button,
+	})
+	UI.new("UIAspectRatioConstraint", { AspectRatio = 1, Parent = orb })
+	local scale = UI.new("UIScale", { Parent = orb })
+
+	-- Expanding pulse ring.
+	local pulse = UI.new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		Parent = orb,
+	}, { UI.corner(999) })
+	local pulseStroke = UI.stroke(C.Cyan, 0, 2)
+	pulseStroke.Parent = pulse
+
+	-- Glass disc.
+	local disc = UI.new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromScale(0.86, 0.86),
+		BackgroundColor3 = Color3.fromRGB(8, 30, 52),
+		BackgroundTransparency = 0.25,
+		Parent = orb,
+	}, { UI.corner(999) })
+	UI.gradient({ Color3.fromRGB(120, 200, 255), Color3.fromRGB(30, 60, 110) }, 90).Parent = disc
+	local discStroke = UI.stroke(C.Cyan, 0.05, 3)
+	discStroke.Parent = disc
+
+	-- Rotating tick ring.
+	local ticks = UI.new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromScale(1.08, 1.08),
+		BackgroundTransparency = 1,
+		Parent = orb,
+	})
+	for k = 0, 3 do
+		local holder = UI.new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromScale(1, 1),
+			Rotation = k * 90,
+			BackgroundTransparency = 1,
+			Parent = ticks,
+		})
+		UI.new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0),
+			Position = UDim2.fromScale(0.5, 0),
+			Size = UDim2.fromScale(0.16, 0.03),
+			BackgroundColor3 = C.Cyan,
+			Parent = holder,
+		}, { UI.corner(99) })
+	end
+	table.insert(spinners, ticks)
+
+	-- The plus.
+	local plus = UI.new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromScale(0.44, 0.44),
+		BackgroundTransparency = 1,
+		Parent = disc,
+	})
+	local bars = {}
+	for _, size in { UDim2.fromScale(1, 0.17), UDim2.fromScale(0.17, 1) } do
+		local bar = UI.new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = size,
+			BackgroundColor3 = C.Text,
+			Parent = plus,
+		}, { UI.corner(99) })
+		table.insert(bars, bar)
+	end
+
+	local caption = UI.text({
+		Text = "INVITE",
+		Font = F.Heavy,
+		TextScaled = true,
+		TextColor3 = C.Text,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		Position = UDim2.fromScale(0, 0.72),
+		Size = UDim2.fromScale(1, 0.12),
+		Parent = button,
+	})
+	UI.text({
+		Text = string.format("SLOT %02d  ·  OPEN", index),
+		Font = F.Bold,
+		TextScaled = true,
+		TextColor3 = C.Cyan,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		Position = UDim2.fromScale(0, 0.85),
+		Size = UDim2.fromScale(1, 0.075),
+		Parent = button,
+	})
+
+	-- Looping pulse.
+	task.spawn(function()
+		task.wait(index * 0.35)
+		while gui.Parent do
+			pulse.Size = UDim2.fromScale(0.86, 0.86)
+			pulseStroke.Transparency = 0.1
+			UI.tween(pulse, 1.6, { Size = UDim2.fromScale(1.35, 1.35) }, Enum.EasingStyle.Sine)
+			UI.tween(pulseStroke, 1.6, { Transparency = 1 }, Enum.EasingStyle.Sine)
+			task.wait(2.2)
+		end
+	end)
+
+	button.MouseEnter:Connect(function()
+		UI.tween(scale, 0.2, { Scale = 1.12 }, Enum.EasingStyle.Back)
+		UI.tween(disc, 0.2, { BackgroundTransparency = 0.05 })
+		UI.tween(discStroke, 0.2, { Color = C.Amber })
+		UI.tween(caption, 0.2, { TextColor3 = C.Amber })
+		for _, bar in bars do
+			UI.tween(bar, 0.2, { BackgroundColor3 = C.Amber })
+		end
+	end)
+	button.MouseLeave:Connect(function()
+		UI.tween(scale, 0.25, { Scale = 1 })
+		UI.tween(disc, 0.25, { BackgroundTransparency = 0.25 })
+		UI.tween(discStroke, 0.25, { Color = C.Cyan })
+		UI.tween(caption, 0.25, { TextColor3 = C.Text })
+		for _, bar in bars do
+			UI.tween(bar, 0.25, { BackgroundColor3 = C.Text })
+		end
+	end)
+	button.MouseButton1Down:Connect(function()
+		UI.tween(scale, 0.08, { Scale = 0.94 })
+	end)
+	button.Activated:Connect(function()
+		UI.tween(scale, 0.3, { Scale = 1.12 }, Enum.EasingStyle.Back)
+		onInvite(index)
+	end)
+
+	table.insert(billboards, gui)
+	table.insert(bobbers, { gui = gui, base = gui.StudsOffsetWorldSpace, phase = index * 1.3 })
+end
+
+function SlotBillboards.build(onInvite: (number) -> ())
+	local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui") :: PlayerGui
+	local lobby = workspace:WaitForChild("HelixLobby")
+
+	for index = 1, #Theme.Lobby.Slots do
+		local folder = lobby:WaitForChild("Slot" .. index)
+		local anchor = folder:WaitForChild("Anchor") :: BasePart
+		if index == 1 then
+			nameplate(anchor, playerGui)
+		else
+			inviteButton(index, anchor, playerGui, onInvite)
+		end
+	end
+
+	RunService.RenderStepped:Connect(function()
+		local t = os.clock()
+		for _, b in bobbers do
+			b.gui.StudsOffsetWorldSpace = b.base + Vector3.new(0, math.sin(t * 1.4 + b.phase) * 0.18, 0)
+		end
+		for _, spinner in spinners do
+			spinner.Rotation = (t * 28) % 360
+		end
+	end)
+end
+
+function SlotBillboards.setVisible(visible: boolean)
+	for _, gui in billboards do
+		gui.Enabled = visible
+	end
+end
+
+return SlotBillboards
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="24">
+          <Properties>
+            <string name="Name">Toast</string>
+            <string name="Source"><![CDATA[--!strict
+-- Slide-in notification toasts (top-right, under the nav bar). Used to give
+-- fake buttons a satisfying response.
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Theme = require(ReplicatedStorage:WaitForChild("LobbyShared"):WaitForChild("Theme"))
+local UI = require(script.Parent.UI)
+local C = Theme.Colors
+local F = Theme.Fonts
+
+local Toast = {}
+
+local container: Frame? = nil
+
+function Toast.mount(parent: Instance)
+	container = UI.new("Frame", {
+		Name = "Toasts",
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, -28, 0, 96),
+		Size = UDim2.fromOffset(340, 400),
+		BackgroundTransparency = 1,
+		ZIndex = 50,
+		Parent = parent,
+	}, { UI.list(Enum.FillDirection.Vertical, 10, Enum.HorizontalAlignment.Right) })
+end
+
+function Toast.show(title: string, body: string, accent: Color3?)
+	local holder = container
+	if not holder then
+		return
+	end
+	local color = accent or C.Cyan
+
+	-- Outer slot animates height so stacked toasts glide.
+	local slot = UI.new("Frame", {
+		Size = UDim2.fromOffset(340, 0),
+		BackgroundTransparency = 1,
+		ClipsDescendants = false,
+		Parent = holder,
+	})
+	local card = UI.panel({
+		Size = UDim2.fromOffset(340, 68),
+		Position = UDim2.fromOffset(380, 0),
+		BackgroundColor3 = C.PanelRaised,
+		BackgroundTransparency = 0.05,
+		ZIndex = 50,
+		Parent = slot,
+	}, 12)
+	UI.new("Frame", {
+		Size = UDim2.new(0, 4, 1, -20),
+		Position = UDim2.fromOffset(12, 10),
+		BackgroundColor3 = color,
+		ZIndex = 51,
+		Parent = card,
+	}, { UI.corner(2) })
+	UI.text({
+		Text = title,
+		Font = F.Heavy,
+		TextSize = 16,
+		TextColor3 = C.Text,
+		Position = UDim2.fromOffset(28, 12),
+		Size = UDim2.new(1, -40, 0, 20),
+		ZIndex = 51,
+		Parent = card,
+	})
+	UI.text({
+		Text = body,
+		Font = F.Medium,
+		TextSize = 14,
+		TextColor3 = C.TextDim,
+		Position = UDim2.fromOffset(28, 34),
+		Size = UDim2.new(1, -40, 0, 20),
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		ZIndex = 51,
+		Parent = card,
+	})
+
+	UI.tween(slot, 0.25, { Size = UDim2.fromOffset(340, 68) })
+	UI.tween(card, 0.45, { Position = UDim2.fromOffset(0, 0) })
+
+	task.delay(3.2, function()
+		UI.tween(card, 0.35, { Position = UDim2.fromOffset(380, 0) }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+		task.wait(0.3)
+		UI.tween(slot, 0.25, { Size = UDim2.fromOffset(340, 0) })
+		task.wait(0.3)
+		slot:Destroy()
+	end)
+end
+
+return Toast
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="25">
+          <Properties>
+            <string name="Name">TopBar</string>
+            <string name="Source"><![CDATA[--!strict
+-- Top navigation: logo, the seven menu tabs with a sliding underline,
+-- currencies, level badge and the player chip.
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Theme = require(ReplicatedStorage:WaitForChild("LobbyShared"):WaitForChild("Theme"))
+local UI = require(script.Parent.UI)
+local C = Theme.Colors
+local F = Theme.Fonts
+
+local TopBar = {}
+
+local BAR_HEIGHT = 76
+local TAB_WIDTH = 106
+local TABS_X = 292
+
+export type TabDef = { Name: string, Badge: string? }
+
+export type TopBarApi = {
+	setSelected: (index: number) -> (),
+}
+
+local function logo(parent: Instance)
+	local holder = UI.new("Frame", {
+		Position = UDim2.fromOffset(32, 0),
+		Size = UDim2.fromOffset(240, BAR_HEIGHT),
+		BackgroundTransparency = 1,
+		Parent = parent,
+	})
+	local mark = UI.new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromOffset(18, BAR_HEIGHT / 2),
+		Size = UDim2.fromOffset(26, 26),
+		Rotation = 45,
+		BackgroundTransparency = 1,
+		Parent = holder,
+	}, { UI.corner(4), UI.stroke(C.Cyan, 0, 3) })
+	UI.new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromScale(0.42, 0.42),
+		BackgroundColor3 = C.Amber,
+		Parent = mark,
+	}, { UI.corner(2) })
+
+	UI.text({
+		Text = Theme.GameTitle,
+		Font = F.Display,
+		TextSize = 26,
+		TextColor3 = C.Text,
+		Position = UDim2.fromOffset(46, 15),
+		Size = UDim2.fromOffset(180, 30),
+		Parent = holder,
+	})
+	UI.text({
+		Text = Theme.GameSubtitle,
+		Font = F.Bold,
+		TextSize = 11,
+		TextColor3 = C.Cyan,
+		Position = UDim2.fromOffset(48, 45),
+		Size = UDim2.fromOffset(180, 14),
+		Parent = holder,
+	})
+	-- Divider between logo and tabs.
+	UI.new("Frame", {
+		Position = UDim2.fromOffset(TABS_X - 32 - 22, 22),
+		Size = UDim2.fromOffset(1, BAR_HEIGHT - 44),
+		BackgroundColor3 = C.Line,
+		BackgroundTransparency = 0.85,
+		Parent = holder,
+	})
+end
+
+local function keyHint(parent: Instance, key: string, x: number)
+	local box = UI.new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromOffset(x, BAR_HEIGHT / 2),
+		Size = UDim2.fromOffset(22, 22),
+		BackgroundColor3 = C.PanelRaised,
+		BackgroundTransparency = 0.2,
+		Parent = parent,
+	}, { UI.corner(5), UI.stroke(C.Line, 0.8) })
+	UI.text({
+		Text = key,
+		Font = F.Heavy,
+		TextSize = 12,
+		TextColor3 = C.TextDim,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		Size = UDim2.fromScale(1, 1),
+		Parent = box,
+	})
+end
+
+local function currency(parent: Instance, order: number, kind: "coin" | "gem", amount: number, color: Color3)
+	local pill = UI.new("Frame", {
+		LayoutOrder = order,
+		Size = UDim2.fromOffset(132, 36),
+		BackgroundColor3 = C.Panel,
+		BackgroundTransparency = 0.25,
+		Parent = parent,
+	}, { UI.corner(18), UI.stroke(C.Line, 0.88) })
+	if kind == "coin" then
+		UI.coin(pill, color, 20, { Position = UDim2.fromOffset(9, 8) })
+	else
+		UI.diamond(pill, color, 15, { Position = UDim2.fromOffset(12, 10) })
+	end
+	UI.text({
+		Text = UI.formatNumber(amount),
+		Font = F.Heavy,
+		TextSize = 16,
+		Position = UDim2.fromOffset(37, 0),
+		Size = UDim2.new(1, -70, 1, 0),
+		Parent = pill,
+	})
+	local add = UI.new("TextButton", {
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -6, 0.5, 0),
+		Size = UDim2.fromOffset(24, 24),
+		BackgroundColor3 = color,
+		BackgroundTransparency = 0.75,
+		Text = "+",
+		Font = F.Heavy,
+		TextSize = 18,
+		TextColor3 = color,
+		Parent = pill,
+	}, { UI.corner(12) })
+	UI.hover(add)
+	return add
+end
+
+function TopBar.build(parent: Instance, tabs: { TabDef }, onSelect: (index: number) -> (), onStore: () -> ()): TopBarApi
+	local player = Players.LocalPlayer
+
+	local bar = UI.new("Frame", {
+		Name = "TopBar",
+		Size = UDim2.new(1, 0, 0, BAR_HEIGHT),
+		BackgroundColor3 = C.Void,
+		BackgroundTransparency = 0.05,
+		ZIndex = 10,
+		Parent = parent,
+	})
+	UI.gradient(
+		{ Color3.new(1, 1, 1), Color3.new(1, 1, 1) },
+		0,
+		NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 0),
+			NumberSequenceKeypoint.new(0.5, 0.25),
+			NumberSequenceKeypoint.new(1, 0),
+		})
+	).Parent = bar
+	-- Hairline + soft cyan glow under the bar.
+	UI.new("Frame", {
+		Position = UDim2.new(0, 0, 1, 0),
+		Size = UDim2.new(1, 0, 0, 1),
+		BackgroundColor3 = C.Line,
+		BackgroundTransparency = 0.86,
+		Parent = bar,
+	})
+	UI.new("Frame", {
+		Position = UDim2.new(0, 0, 1, 1),
+		Size = UDim2.new(1, 0, 0, 26),
+		BackgroundColor3 = C.Void,
+		BackgroundTransparency = 0.3,
+		Parent = bar,
+	}, {
+		UI.gradient({ C.Void }, 90, NumberSequence.new(0.2, 1)),
+	})
+
+	logo(bar)
+
+	-- Tabs ------------------------------------------------------------------
+	local strip = UI.new("Frame", {
+		Position = UDim2.fromOffset(TABS_X, 0),
+		Size = UDim2.fromOffset(TAB_WIDTH * #tabs, BAR_HEIGHT),
+		BackgroundTransparency = 1,
+		Parent = bar,
+	})
+	keyHint(bar, "Q", TABS_X - 14)
+	keyHint(bar, "E", TABS_X + TAB_WIDTH * #tabs + 14)
+
+	local indicator = UI.new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.fromOffset(TAB_WIDTH / 2, BAR_HEIGHT),
+		Size = UDim2.fromOffset(TAB_WIDTH - 34, 3),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		ZIndex = 12,
+		Parent = strip,
+	}, { UI.corner(2), UI.gradient({ C.Cyan, Color3.fromRGB(140, 240, 255), C.Cyan }, 0) })
+	local glow = UI.new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 1),
+		Position = UDim2.fromOffset(TAB_WIDTH / 2, BAR_HEIGHT),
+		Size = UDim2.fromOffset(TAB_WIDTH, 34),
+		BackgroundColor3 = C.Cyan,
+		BackgroundTransparency = 0,
+		ZIndex = 11,
+		Parent = strip,
+	}, {
+		UI.gradient({ C.Cyan }, 90, NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 1),
+			NumberSequenceKeypoint.new(1, 0.8),
+		})),
+	})
+
+	local labels: { TextButton } = {}
+	local selected = 1
+
+	local function paint(index: number, hovered: boolean)
+		local label = labels[index]
+		local color = if index == selected then C.Text elseif hovered then Color3.fromRGB(205, 215, 235) else C.TextDim
+		UI.tween(label, 0.18, { TextColor3 = color })
+	end
+
+	for i, tab in tabs do
+		local button: TextButton = UI.new("TextButton", {
+			Name = tab.Name,
+			Position = UDim2.fromOffset((i - 1) * TAB_WIDTH, 0),
+			Size = UDim2.fromOffset(TAB_WIDTH, BAR_HEIGHT),
+			Text = string.upper(tab.Name),
+			Font = F.Heavy,
+			TextSize = 15,
+			TextColor3 = C.TextDim,
+			BackgroundTransparency = 1,
+			ZIndex = 13,
+			Parent = strip,
+		})
+		labels[i] = button
+
+		if tab.Badge then
+			local isDot = tab.Badge == "dot"
+			local badge = UI.new("Frame", {
+				AnchorPoint = Vector2.new(0, 0.5),
+				Position = UDim2.new(0.5, isDot and 28 or 24, 0, 27),
+				Size = isDot and UDim2.fromOffset(8, 8) or UDim2.fromOffset(0, 16),
+				AutomaticSize = isDot and Enum.AutomaticSize.None or Enum.AutomaticSize.X,
+				BackgroundColor3 = isDot and C.Amber or C.Magenta,
+				ZIndex = 14,
+				Parent = button,
+			}, { UI.corner(8) })
+			if not isDot then
+				UI.padding(0, 5).Parent = badge
+				UI.text({
+					Text = tab.Badge :: string,
+					Font = F.Heavy,
+					TextSize = 11,
+					TextColor3 = C.Text,
+					AutomaticSize = Enum.AutomaticSize.X,
+					Size = UDim2.fromScale(0, 1),
+					ZIndex = 15,
+					Parent = badge,
+				})
+			end
+		end
+
+		button.MouseEnter:Connect(function()
+			paint(i, true)
+		end)
+		button.MouseLeave:Connect(function()
+			paint(i, false)
+		end)
+		button.Activated:Connect(function()
+			onSelect(i)
+		end)
+	end
+
+	-- Right cluster ---------------------------------------------------------
+	local right = UI.new("Frame", {
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, -28, 0, 0),
+		Size = UDim2.fromOffset(620, BAR_HEIGHT),
+		BackgroundTransparency = 1,
+		Parent = bar,
+	}, { UI.list(Enum.FillDirection.Horizontal, 10, Enum.HorizontalAlignment.Right, Enum.VerticalAlignment.Center) })
+
+	currency(right, 1, "coin", 24850, C.Amber).Activated:Connect(onStore)
+	currency(right, 2, "gem", 1240, C.Cyan).Activated:Connect(onStore)
+
+	UI.new("Frame", {
+		LayoutOrder = 3,
+		Size = UDim2.fromOffset(1, 30),
+		BackgroundColor3 = C.Line,
+		BackgroundTransparency = 0.85,
+		Parent = right,
+	})
+
+	local playerChip = UI.new("Frame", {
+		LayoutOrder = 4,
+		Size = UDim2.fromOffset(210, 48),
+		BackgroundTransparency = 1,
+		Parent = right,
+	})
+	UI.headshot(playerChip, 44, C.Amber, { Position = UDim2.fromOffset(0, 2) })
+	-- Level badge overlapping the avatar.
+	local level = UI.diamond(playerChip, C.Amber, 20, {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromOffset(40, 40),
+		Size = UDim2.fromOffset(20, 20),
+	})
+	UI.stroke(C.Void, 0, 2).Parent = level
+	UI.text({
+		Text = "42",
+		Font = F.Heavy,
+		TextSize = 11,
+		TextColor3 = C.Void,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromOffset(40, 40),
+		Size = UDim2.fromOffset(20, 20),
+		Parent = playerChip,
+	})
+	UI.text({
+		Text = player.DisplayName,
+		Font = F.Heavy,
+		TextSize = 17,
+		Position = UDim2.fromOffset(58, 5),
+		Size = UDim2.fromOffset(150, 20),
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Parent = playerChip,
+	})
+	UI.text({
+		Text = "DIAMOND II  ·  LVL 42",
+		Font = F.Bold,
+		TextSize = 12,
+		TextColor3 = C.Cyan,
+		Position = UDim2.fromOffset(58, 26),
+		Size = UDim2.fromOffset(150, 16),
+		Parent = playerChip,
+	})
+	-- Tiny XP strip.
+	UI.progress(playerChip, 0.68, C.Amber, {
+		Position = UDim2.fromOffset(58, 44),
+		Size = UDim2.fromOffset(120, 3),
+	})
+
+	local api = {}
+	function api.setSelected(index: number)
+		selected = index
+		local x = (index - 1) * TAB_WIDTH + TAB_WIDTH / 2
+		UI.tween(indicator, 0.42, { Position = UDim2.fromOffset(x, BAR_HEIGHT) })
+		UI.tween(glow, 0.42, { Position = UDim2.fromOffset(x, BAR_HEIGHT) })
+		-- Quick squash on the underline for a springy feel.
+		indicator.Size = UDim2.fromOffset(TAB_WIDTH - 10, 3)
+		UI.tween(indicator, 0.5, { Size = UDim2.fromOffset(TAB_WIDTH - 34, 3) })
+		for i in labels do
+			paint(i, false)
+		end
+	end
+	return api
+end
+
+TopBar.Height = BAR_HEIGHT
+
+return TopBar
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="26">
+          <Properties>
+            <string name="Name">UI</string>
+            <string name="Source"><![CDATA[--!strict
+-- Tiny UI toolkit: instance construction, styling helpers, and the shared
+-- button/hover behavior used across every page.
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+
+local Theme = require(ReplicatedStorage:WaitForChild("LobbyShared"):WaitForChild("Theme"))
+local C = Theme.Colors
+local F = Theme.Fonts
+
+local UI = {}
+
+export type Props = { [string]: any }
+
+-- new("Frame", { Size = ..., Parent = ... }, { children })
+function UI.new(className: string, props: Props?, children: { any }?): any
+	local inst = Instance.new(className) :: any
+	if inst:IsA("GuiObject") then
+		inst.BorderSizePixel = 0
+	end
+	if inst:IsA("TextLabel") or inst:IsA("TextButton") or inst:IsA("TextBox") then
+		-- Labels default to no fill; buttons keep theirs (cards and pills rely on it).
+		if not inst:IsA("TextButton") then
+			inst.BackgroundTransparency = 1
+		end
+		inst.Font = F.Medium
+		inst.TextColor3 = C.Text
+		inst.TextSize = 16
+		if inst:IsA("TextButton") then
+			inst.AutoButtonColor = false
+		end
+	end
+	if inst:IsA("ImageLabel") or inst:IsA("ImageButton") then
+		inst.BackgroundTransparency = 1
+		if inst:IsA("ImageButton") then
+			inst.AutoButtonColor = false
+		end
+	end
+	local parent = nil
+	if props then
+		for key, value in props do
+			if key == "Parent" then
+				parent = value
+			else
+				inst[key] = value
+			end
+		end
+	end
+	if children then
+		for _, child in children do
+			child.Parent = inst
+		end
+	end
+	if parent then
+		inst.Parent = parent
+	end
+	return inst
+end
+
+function UI.corner(radius: number?): Instance
+	return UI.new("UICorner", { CornerRadius = UDim.new(0, radius or 10) })
+end
+
+function UI.stroke(color: Color3?, transparency: number?, thickness: number?): UIStroke
+	return UI.new("UIStroke", {
+		Color = color or C.Line,
+		Transparency = transparency or 0.9,
+		Thickness = thickness or 1,
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+	})
+end
+
+function UI.gradient(colors: { Color3 } | ColorSequence, rotation: number?, transparency: NumberSequence?): Instance
+	local seq: ColorSequence
+	if typeof(colors) == "ColorSequence" then
+		seq = colors
+	else
+		local list = colors :: { Color3 }
+		if #list == 1 then
+			seq = ColorSequence.new(list[1])
+		else
+			local points = {}
+			for i, color in list do
+				table.insert(points, ColorSequenceKeypoint.new((i - 1) / (#list - 1), color))
+			end
+			seq = ColorSequence.new(points)
+		end
+	end
+	return UI.new("UIGradient", {
+		Color = seq,
+		Rotation = rotation or 0,
+		Transparency = transparency or NumberSequence.new(0),
+	})
+end
+
+function UI.padding(all: number, horizontal: number?): Instance
+	local h = horizontal or all
+	return UI.new("UIPadding", {
+		PaddingTop = UDim.new(0, all),
+		PaddingBottom = UDim.new(0, all),
+		PaddingLeft = UDim.new(0, h),
+		PaddingRight = UDim.new(0, h),
+	})
+end
+
+function UI.list(direction: Enum.FillDirection, gap: number, hAlign: Enum.HorizontalAlignment?, vAlign: Enum.VerticalAlignment?): Instance
+	return UI.new("UIListLayout", {
+		FillDirection = direction,
+		Padding = UDim.new(0, gap),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		HorizontalAlignment = hAlign or Enum.HorizontalAlignment.Left,
+		VerticalAlignment = vAlign or Enum.VerticalAlignment.Top,
+	})
+end
+
+function UI.grid(cellSize: UDim2, gap: number): Instance
+	return UI.new("UIGridLayout", {
+		CellSize = cellSize,
+		CellPadding = UDim2.fromOffset(gap, gap),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+	})
+end
+
+function UI.tween(inst: Instance, time: number, goal: Props, style: Enum.EasingStyle?, direction: Enum.EasingDirection?): Tween
+	local tween = TweenService:Create(
+		inst,
+		TweenInfo.new(time, style or Enum.EasingStyle.Quint, direction or Enum.EasingDirection.Out),
+		goal
+	)
+	tween:Play()
+	return tween
+end
+
+function UI.text(props: Props): TextLabel
+	local p = table.clone(props)
+	p.TextXAlignment = p.TextXAlignment or Enum.TextXAlignment.Left
+	return UI.new("TextLabel", p)
+end
+
+-- Glassy panel: dark fill, faint top highlight, hairline stroke.
+function UI.panel(props: Props, radius: number?): Frame
+	local p = table.clone(props)
+	p.BackgroundColor3 = p.BackgroundColor3 or C.Panel
+	p.BackgroundTransparency = p.BackgroundTransparency or 0.12
+	local frame = UI.new("Frame", p)
+	UI.corner(radius or 14).Parent = frame
+	UI.stroke(C.Line, 0.9).Parent = frame
+	UI.gradient({ Color3.new(1, 1, 1), Color3.fromRGB(200, 210, 230) }, 90).Parent = frame
+	return frame
+end
+
+-- Small uppercase section header with an accent tick.
+function UI.header(parent: Instance, text: string, props: Props?): Frame
+	local p: Props = {
+		Size = UDim2.new(1, 0, 0, 22),
+		BackgroundTransparency = 1,
+		Parent = parent,
+	}
+	if props then
+		for k, v in props do
+			p[k] = v
+		end
+	end
+	local holder = UI.new("Frame", p)
+	UI.new("Frame", {
+		Size = UDim2.fromOffset(3, 14),
+		Position = UDim2.new(0, 0, 0.5, -7),
+		BackgroundColor3 = C.Cyan,
+		Parent = holder,
+	})
+	UI.text({
+		Text = string.upper(text),
+		Font = F.Bold,
+		TextSize = 14,
+		TextColor3 = C.TextDim,
+		Position = UDim2.fromOffset(12, 0),
+		Size = UDim2.new(1, -12, 1, 0),
+		Parent = holder,
+	})
+	return holder
+end
+
+-- Adds hover lift + press squish to any GuiButton.
+function UI.hover(button: GuiButton, onEnter: (() -> ())?, onLeave: (() -> ())?)
+	local scale = button:FindFirstChildOfClass("UIScale") or UI.new("UIScale", { Parent = button })
+	button.MouseEnter:Connect(function()
+		UI.tween(scale, 0.18, { Scale = 1.03 })
+		if onEnter then
+			onEnter()
+		end
+	end)
+	button.MouseLeave:Connect(function()
+		UI.tween(scale, 0.22, { Scale = 1 })
+		if onLeave then
+			onLeave()
+		end
+	end)
+	button.MouseButton1Down:Connect(function()
+		UI.tween(scale, 0.08, { Scale = 0.97 })
+	end)
+	button.MouseButton1Up:Connect(function()
+		UI.tween(scale, 0.18, { Scale = 1.03 })
+	end)
+end
+
+export type ButtonStyle = "primary" | "accent" | "ghost" | "dark"
+
+-- Standard button. "primary" = amber hero CTA, "accent" = cyan, "ghost" = outline.
+function UI.button(props: Props, style: ButtonStyle?, text: string?): TextButton
+	local s = style or "dark"
+	local p = table.clone(props)
+	local radius = p.CornerRadius or 10
+	p.CornerRadius = nil
+	p.Text = text or p.Text or ""
+	p.Font = p.Font or F.Heavy
+	p.TextSize = p.TextSize or 17
+	p.BackgroundTransparency = 0
+	if s == "primary" then
+		p.BackgroundColor3 = Color3.new(1, 1, 1)
+		p.TextColor3 = C.Void
+	elseif s == "accent" then
+		p.BackgroundColor3 = Color3.new(1, 1, 1)
+		p.TextColor3 = C.Void
+	elseif s == "ghost" then
+		p.BackgroundColor3 = C.Panel
+		p.BackgroundTransparency = 0.5
+		p.TextColor3 = C.Text
+	else
+		p.BackgroundColor3 = C.PanelRaised
+		p.TextColor3 = C.Text
+	end
+	local button: TextButton = UI.new("TextButton", p)
+	UI.corner(radius).Parent = button
+
+	if s == "primary" then
+		UI.gradient({ C.Amber, C.AmberDeep }, 0).Parent = button
+	elseif s == "accent" then
+		UI.gradient({ C.Cyan, C.CyanDeep }, 0).Parent = button
+	else
+		local stroke = UI.stroke(C.Line, s == "ghost" and 0.75 or 0.88)
+		stroke.Parent = button
+		UI.hover(button, function()
+			UI.tween(stroke, 0.18, { Transparency = 0.5 })
+			UI.tween(button, 0.18, { BackgroundColor3 = C.PanelHover })
+		end, function()
+			UI.tween(stroke, 0.22, { Transparency = s == "ghost" and 0.75 or 0.88 })
+			UI.tween(button, 0.22, { BackgroundColor3 = s == "ghost" and C.Panel or C.PanelRaised })
+		end)
+		return button
+	end
+	UI.hover(button)
+	return button
+end
+
+-- A pill-shaped info chip, e.g. "EU-WEST".
+function UI.chip(parent: Instance, text: string, color: Color3?, props: Props?): Frame
+	local p: Props = {
+		AutomaticSize = Enum.AutomaticSize.X,
+		Size = UDim2.fromOffset(0, 24),
+		BackgroundColor3 = color or C.Cyan,
+		BackgroundTransparency = 0.82,
+		Parent = parent,
+	}
+	if props then
+		for k, v in props do
+			p[k] = v
+		end
+	end
+	local chip = UI.new("Frame", p)
+	UI.corner(12).Parent = chip
+	UI.padding(0, 10).Parent = chip
+	UI.text({
+		Text = text,
+		Font = F.Bold,
+		TextSize = 13,
+		TextColor3 = color or C.Cyan,
+		AutomaticSize = Enum.AutomaticSize.X,
+		Size = UDim2.fromScale(0, 1),
+		Parent = chip,
+	})
+	return chip
+end
+
+-- Horizontal progress bar; returns the frame and its fill.
+function UI.progress(parent: Instance, alpha: number, color: Color3?, props: Props?): (Frame, Frame)
+	local p: Props = {
+		Size = UDim2.new(1, 0, 0, 8),
+		BackgroundColor3 = C.Void,
+		BackgroundTransparency = 0.2,
+		Parent = parent,
+	}
+	if props then
+		for k, v in props do
+			p[k] = v
+		end
+	end
+	local track = UI.new("Frame", p)
+	UI.corner(4).Parent = track
+	local fill = UI.new("Frame", {
+		Size = UDim2.fromScale(math.clamp(alpha, 0, 1), 1),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		Parent = track,
+	})
+	UI.corner(4).Parent = fill
+	local accent = color or C.Cyan
+	UI.gradient({ accent:Lerp(Color3.new(1, 1, 1), 0.25), accent }, 0).Parent = fill
+	return track, fill
+end
+
+-- Diamond-shaped currency/level glyph drawn from frames.
+function UI.diamond(parent: Instance, color: Color3, size: number, props: Props?): Frame
+	local p: Props = {
+		Size = UDim2.fromOffset(size, size),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		Rotation = 45,
+		Parent = parent,
+	}
+	if props then
+		for k, v in props do
+			p[k] = v
+		end
+	end
+	local d = UI.new("Frame", p)
+	UI.corner(math.floor(size * 0.2)).Parent = d
+	UI.gradient({ color:Lerp(Color3.new(1, 1, 1), 0.45), color }, 45).Parent = d
+	return d
+end
+
+function UI.coin(parent: Instance, color: Color3, size: number, props: Props?): Frame
+	local p: Props = {
+		Size = UDim2.fromOffset(size, size),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		Parent = parent,
+	}
+	if props then
+		for k, v in props do
+			p[k] = v
+		end
+	end
+	local c = UI.new("Frame", p)
+	UI.corner(size).Parent = c
+	UI.gradient({ color:Lerp(Color3.new(1, 1, 1), 0.4), color, color:Lerp(Color3.new(0, 0, 0), 0.25) }, 60).Parent = c
+	UI.new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromScale(0.5, 0.5),
+		BackgroundTransparency = 1,
+		Parent = c,
+	}, { UI.corner(size), UI.stroke(Color3.new(1, 1, 1), 0.35, 1.5) })
+	return c
+end
+
+-- Roblox avatar thumbnail of the local player. Studio test players have
+-- negative ids, so fall back to a real account to keep the image populated.
+function UI.avatarUrl(kind: "head" | "body"): string
+	local Players = game:GetService("Players")
+	local id = Players.LocalPlayer.UserId
+	if id <= 0 then
+		id = 1
+	end
+	if kind == "head" then
+		return string.format("rbxthumb://type=AvatarHeadShot&id=%d&w=150&h=150", id)
+	end
+	return string.format("rbxthumb://type=Avatar&id=%d&w=420&h=420", id)
+end
+
+-- Round avatar headshot with an accent ring.
+function UI.headshot(parent: Instance, size: number, ring: Color3?, props: Props?): Frame
+	local p: Props = {
+		Size = UDim2.fromOffset(size, size),
+		BackgroundColor3 = C.PanelHover,
+		Parent = parent,
+	}
+	if props then
+		for k, v in props do
+			p[k] = v
+		end
+	end
+	local frame = UI.new("Frame", p)
+	UI.corner(size).Parent = frame
+	UI.gradient({ Color3.fromRGB(60, 90, 140), Color3.fromRGB(20, 30, 54) }, 90).Parent = frame
+	UI.new("ImageLabel", {
+		Image = UI.avatarUrl("head"),
+		Size = UDim2.fromScale(1, 1),
+		Parent = frame,
+	}, { UI.corner(size) })
+	if ring then
+		UI.stroke(ring, 0, 2).Parent = frame
+	end
+	return frame
+end
+
+-- Marks a GuiObject for the cascade animation that plays when its page opens.
+function UI.stagger(obj: GuiObject, order: number): GuiObject
+	obj:SetAttribute("Stagger", order)
+	return obj
+end
+
+function UI.formatNumber(n: number): string
+	local s = tostring(math.floor(n))
+	local formatted = s:reverse():gsub("(%d%d%d)", "%1,"):reverse()
+	if formatted:sub(1, 1) == "," then
+		formatted = formatted:sub(2)
+	end
+	return formatted
+end
+
+return UI
+]]></string>
+          </Properties>
+        </Item>
+      </Item>
+    </Item>
+  </Item>
+</roblox>
